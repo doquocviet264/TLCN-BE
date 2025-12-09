@@ -18,7 +18,7 @@ import swaggerUi from "swagger-ui-express";
 import chatRoutes from "./routes/chat.routes.js";
 import { swaggerSpec } from "./config/swagger.js";
 import blogRouter from "./routes/blog.routes.js";
-
+import checkinRoutes from "./routes/checkin.routes.js"; // <--- Import file vừa tạo
 
 import { registerConfirmOrRefundJob } from "./jobs/confirmOrRefund.job.js";
 
@@ -29,9 +29,12 @@ app.use("/uploads", express.static(path.resolve("uploads")));
  *  CORS + BODY + COOKIES
  * ========================= */
 const isProd = process.env.NODE_ENV === "production";
-const ALLOW_ORIGINS = (process.env.CORS_ORIGINS || "http://localhost:4000,http://127.0.0.1:4000,http://localhost:5173,http://127.0.0.1:5173")
+const ALLOW_ORIGINS = (
+  process.env.CORS_ORIGINS ||
+  "http://localhost:4000,http://127.0.0.1:4000,http://localhost:5173,http://127.0.0.1:5173"
+)
   .split(",")
-  .map(s => s.trim());
+  .map((s) => s.trim());
 
 app.set("trust proxy", true); // cần cho cookie secure khi deploy sau này
 
@@ -39,7 +42,8 @@ app.use(
   cors({
     origin(origin, cb) {
       if (!origin) return cb(null, true); // Postman/cURL
-      if (!isProd) return cb(null, true);  {
+      if (!isProd) return cb(null, true);
+      {
         return cb(null, true);
       }
       if (ALLOW_ORIGINS.includes(origin)) return cb(null, true);
@@ -66,7 +70,7 @@ app.use(
     resave: false,
     saveUninitialized: false,
     cookie: {
-      secure: isProd,                // production (https) = true
+      secure: isProd, // production (https) = true
       sameSite: isProd ? "none" : "lax",
       httpOnly: true,
     },
@@ -95,6 +99,8 @@ app.use("/api/leader", leaderRoutes);
 app.use("/api/reviews", reviewRoutes);
 app.use("/api/chat", chatRoutes);
 app.use("/api/blog", blogRouter);
+app.use("/api/checkins", checkinRoutes);
+
 /* =========================
  *  404 FALLBACK
  * ========================= */

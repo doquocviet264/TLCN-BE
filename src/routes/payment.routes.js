@@ -1,8 +1,10 @@
 import { Router } from "express";
-import { verifyMoMoIPN } from "../utils/momo.js";
 import { onPaymentReceived } from "../controllers/booking.controller.js";
+import { vnpIpn, vnpReturn } from "../controllers/payment.controller.js";
 import { auth } from "../middleware/auth.js";
-import { vnpReturn, vnpIpn } from "../controllers/payment.controller.js";
+import { verifyMoMoIPN } from "../utils/momo.js";
+import { vnpCreate } from "../controllers/vnpay.controllers.js";
+import { sepayCreate, sepayWebhook, sepayCheck } from "../controllers/sepay.controllers.js";
 const router = Router();
 
 /**
@@ -19,12 +21,12 @@ router.get("/momo/return", async (req, res) => {
     // 0 = success (MoMo)
     if (String(q.resultCode) === "0") {
       req.body = {
-        code:    q.orderId,               // booking.code bạn đã set = orderId
-        amount:  Number(q.amount),        // VND
-        provider:"momo",
-        ref:     String(q.transId || q.requestId || "MoMo")
+        code: q.orderId, // booking.code bạn đã set = orderId
+        amount: Number(q.amount), // VND
+        provider: "momo",
+        ref: String(q.transId || q.requestId || "MoMo"),
       };
-      await onPaymentReceived(req, res);      // cập nhật DB (đã send JSON trong onPaymentReceived)
+      await onPaymentReceived(req, res); // cập nhật DB (đã send JSON trong onPaymentReceived)
     } else {
       res.status(400).send("PAYMENT_FAILED:" + q.resultCode);
     }
@@ -46,14 +48,16 @@ router.post("/momo/ipn", async (req, res) => {
 
     if (String(q.resultCode) === "0") {
       req.body = {
-        code:    q.orderId,
-        amount:  Number(q.amount),
-        provider:"momo",
-        ref:     String(q.transId || q.requestId || "MoMo")
+        code: q.orderId,
+        amount: Number(q.amount),
+        provider: "momo",
+        ref: String(q.transId || q.requestId || "MoMo"),
       };
       await onPaymentReceived(req, res); // đã res.json bên trong
     } else {
-      res.status(400).json({ message: "PAYMENT_FAILED", resultCode: q.resultCode });
+      res
+        .status(400)
+        .json({ message: "PAYMENT_FAILED", resultCode: q.resultCode });
     }
   } catch (err) {
     res.status(500).json({ message: err.message });
@@ -78,31 +82,38 @@ router.post("/momo/create-remaining", auth, async (req, res) => {
       return res.status(403).json({ message: "Forbidden" });
     }
 
-    const remain = Math.max(0, (booking.totalPrice || 0) - (booking.paidAmount || 0));
+    const remain = Math.max(
+      0,
+      (booking.totalPrice || 0) - (booking.paidAmount || 0)
+    );
     if (remain <= 0) {
       return res.status(400).json({ message: "No remaining amount" });
     }
 
     const tour = await Tour.findById(booking.tourId).lean();
-    const orderId   = `${booking.code}-remain-${Date.now()}`;
+    const orderId = `${booking.code}-remain-${Date.now()}`;
     const requestId = orderId;
     const orderInfo = `Thanh toan phan con lai ${booking.code}`;
 
     const { payUrl, error, raw } = await createMoMoPayment({
       partnerCode: process.env.MOMO_PARTNER_CODE,
-      accessKey:   process.env.MOMO_ACCESS_KEY,
-      secretKey:   process.env.MOMO_SECRET_KEY,
-      momoApi:     process.env.MOMO_API,
+      accessKey: process.env.MOMO_ACCESS_KEY,
+      secretKey: process.env.MOMO_SECRET_KEY,
+      momoApi: process.env.MOMO_API,
       redirectUrl: process.env.MOMO_REDIRECT_URL,
-      ipnUrl:      process.env.MOMO_IPN_URL,
-      amountVND:   String(remain),
-      orderId, requestId, orderInfo,
+      ipnUrl: process.env.MOMO_IPN_URL,
+      amountVND: String(remain),
+      orderId,
+      requestId,
+      orderInfo,
       requestType: "captureWallet",
-      extraData:   ""
+      extraData: "",
     });
 
     if (error) {
-      return res.status(502).json({ message: "MoMo create payment failed", error, raw });
+      return res
+        .status(502)
+        .json({ message: "MoMo create payment failed", error, raw });
     }
     res.json({ payUrl, remain });
   } catch (err) {
@@ -141,5 +152,12 @@ router.get("/vnpay/return", vnpReturn);
  *         description: JSON { RspCode, Message }
  */
 router.get("/vnpay/ipn", vnpIpn);
+
+router.post("/vnpay/create", vnpCreate);
+
+// ===== SEPAY =====
+router.post("/sepay/create", sepayCreate);
+router.post("/sepay/webhook", sepayWebhook);
+router.get("/sepay/check/:code", sepayCheck);
 
 export default router;

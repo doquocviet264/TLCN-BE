@@ -3,15 +3,26 @@ import { body } from "express-validator";
 import {
   register,
   login,
-  logout,
+  loginWithRememberToken,
+  verifyEmail,
+  resendOtp,
+  forgotPassword,
+  verifyResetOtp,
   resetPassword,
-  getProfile
+  logout,
+  getProfile,
 } from "../controllers/auth.controller.js";
 import { auth } from "../middleware/auth.js";
-import passport from "../config/passport.js";  
+import passport from "../config/passport.js";
 import jwt from "jsonwebtoken";
 import { validate } from "../middleware/validate.js";
 import { passwordValidator } from "../utils/passwordValidator.js";
+import {
+  loginLimiter,
+  registerLimiter,
+  otpLimiter,
+  forgotPasswordLimiter,
+} from "../middleware/rateLimiter.js";
 
 const router = Router();
 
@@ -42,23 +53,30 @@ const VN_PHONE = /^(?:\+?84|0)(?:3|5|7|8|9)\d{8}$/;
  */
 router.post(
   "/register",
+  // registerLimiter, // Tạm tắt rate limit để test
   [
-    body("fullName").optional().isLength({ min: 2, max: 100 }).withMessage("Họ tên phải từ 2-100 ký tự"),
+    body("fullName")
+      .optional()
+      .isLength({ min: 2, max: 100 })
+      .withMessage("Họ tên phải từ 2-100 ký tự"),
     body("username")
       .trim()
-      .notEmpty().withMessage("Username không được để trống")
-      .isLength({ min: 3, max: 32 }).withMessage("Username phải từ 3-32 ký tự")
-      .matches(/^[a-zA-Z0-9_]+$/).withMessage("Username chỉ gồm chữ, số, dấu gạch dưới"),
+      .notEmpty()
+      .withMessage("Username không được để trống")
+      .isLength({ min: 3, max: 32 })
+      .withMessage("Username phải từ 3-32 ký tự")
+      .matches(/^[a-zA-Z0-9_]+$/)
+      .withMessage("Username chỉ gồm chữ, số, dấu gạch dưới"),
     body("email").isEmail().withMessage("Email không hợp lệ").normalizeEmail(),
     body("password").custom(passwordValidator),
     body("phoneNumber")
       .optional({ nullable: true, checkFalsy: true })
-      .matches(/^(?:\+?84|0)(?:3|5|7|8|9)\d{8}$/).withMessage("Số điện thoại VN không hợp lệ"),
+      .matches(/^(?:\+?84|0)(?:3|5|7|8|9)\d{8}$/)
+      .withMessage("Số điện thoại VN không hợp lệ"),
   ],
   validate,
   register
 );
-
 
 // Đăng nhập
 /**
@@ -86,17 +104,38 @@ router.post(
  */
 router.post(
   "/login",
+  // loginLimiter, // Tạm tắt rate limit để test
   [
     body("identifier").trim().notEmpty().withMessage("identifier bắt buộc"),
-    body("password").notEmpty().withMessage("password bắt buộc").custom(passwordValidator)
+    body("password")
+      .notEmpty()
+      .withMessage("password bắt buộc")
+      .custom(passwordValidator),
+    body("rememberMe").optional().isBoolean(),
   ],
   validate,
   login
 );
 
-router.get("/google", passport.authenticate("google", { scope: ["profile", "email"] }));
+// Đăng nhập bằng Remember Token (auto-login)
+router.post(
+  "/login/remember",
+  // loginLimiter, // Tạm tắt rate limit để test
+  [
+    body("email").isEmail().withMessage("Email không hợp lệ").normalizeEmail(),
+    body("rememberToken").notEmpty().withMessage("Token bắt buộc"),
+  ],
+  validate,
+  loginWithRememberToken
+);
 
-router.get("/google/callback",
+router.get(
+  "/google",
+  passport.authenticate("google", { scope: ["profile", "email"] })
+);
+
+router.get(
+  "/google/callback",
   passport.authenticate("google", { failureRedirect: "/login" }),
   (req, res) => {
     // Đăng nhập thành công → cấp JWT hoặc set cookie
@@ -143,9 +182,36 @@ router.post("/logout", logout);
  *       200:
  *         description: New password sent
  */
+// Quên mật khẩu - Bước 1: Gửi OTP
 router.post(
   "/forgot-password",
-  [ body("email").isEmail().withMessage("email không hợp lệ").normalizeEmail() ],
+  forgotPasswordLimiter, // Rate limit: 3 lần / 1 giờ
+  [body("email").isEmail().withMessage("email không hợp lệ").normalizeEmail()],
+  validate,
+  forgotPassword
+);
+
+// Quên mật khẩu - Bước 2: Xác thực OTP
+router.post(
+  "/forgot-password/verify-otp",
+  forgotPasswordLimiter,
+  [
+    body("email").isEmail().withMessage("email không hợp lệ").normalizeEmail(),
+    body("otp").notEmpty().withMessage("OTP bắt buộc").isLength({ min: 6, max: 6 }),
+  ],
+  validate,
+  verifyResetOtp
+);
+
+// Quên mật khẩu - Bước 3: Đặt mật khẩu mới
+router.post(
+  "/forgot-password/reset",
+  forgotPasswordLimiter,
+  [
+    body("email").isEmail().withMessage("email không hợp lệ").normalizeEmail(),
+    body("resetToken").notEmpty().withMessage("Token bắt buộc"),
+    body("newPassword").custom(passwordValidator),
+  ],
   validate,
   resetPassword
 );
@@ -183,5 +249,7 @@ router.post(
  *                   type: string
  */
 router.get("/me", getProfile);
+router.post("/verify", verifyEmail); // Tạm tắt rate limit
+router.post("/resend-otp", resendOtp); // Tạm tắt rate limit
 
 export default router;

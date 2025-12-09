@@ -1,3 +1,4 @@
+// src/controllers/chat.controller.js
 import mongoose from "mongoose";
 import { Booking } from "../models/Booking.js";
 import { Tour } from "../models/Tour.js";
@@ -6,8 +7,13 @@ import { Chat } from "../models/Chat.js";
 /* Helper: xác định role từ token */
 function getRole(user) {
   if (!user) return "guest";
-  if (user.role === "admin")  return "admin";
-  if (user.role === "leader") return "leader";
+
+  // Chuyển về chữ thường để so sánh cho chắc chắn
+  const r = (user.role || "").toLowerCase();
+
+  if (r === "admin") return "admin";
+  if (r === "leader") return "leader";
+
   return "user";
 }
 
@@ -18,7 +24,8 @@ async function canAccessBooking(user, booking) {
   if (!user) return false;
 
   if (role === "admin") return true;
-  if (role === "user" && String(booking.userId) === String(user.id)) return true;
+  if (role === "user" && String(booking.userId) === String(user.id))
+    return true;
 
   if (role === "leader") {
     const tour = await Tour.findById(booking.tourId).select("leaderId");
@@ -45,7 +52,7 @@ async function canAccessTourRoom(user, tourId) {
     const hasBooking = await Booking.exists({
       tourId,
       userId: user.id,
-      bookingStatus: { $ne: "x" } // exclude canceled
+      bookingStatus: { $ne: "x" }, // exclude canceled
     });
     if (hasBooking) return true;
   }
@@ -54,7 +61,7 @@ async function canAccessTourRoom(user, tourId) {
 }
 
 /* =========================
- *  1) BOOKING CHAT (đã có)
+ * 1) BOOKING CHAT
  * ========================= */
 
 // GET /api/chat/booking/:code
@@ -70,10 +77,17 @@ export const getBookingMessages = async (req, res) => {
 
     const messages = await Chat.find({
       roomType: { $in: ["booking", null] },
-      bookingCode: code
-    }).sort({ createdAt: 1 }).lean();
+      bookingCode: code,
+    })
+      .sort({ createdAt: 1 })
+      .lean();
 
-    res.json({ roomType: "booking", bookingCode: code, total: messages.length, data: messages });
+    res.json({
+      roomType: "booking",
+      bookingCode: code,
+      total: messages.length,
+      data: messages,
+    });
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
@@ -104,7 +118,7 @@ export const sendBookingMessage = async (req, res) => {
       fromId: new mongoose.Types.ObjectId(req.user.id),
       fromRole: role,
       content: content.trim(),
-      isSystem: false
+      isSystem: false,
     });
 
     res.status(201).json({ message: "Sent", data: msg });
@@ -113,24 +127,21 @@ export const sendBookingMessage = async (req, res) => {
   }
 };
 
-
 /* =========================================
- *  2) SUPPORT CHAT (chưa đặt tour)
- *  - không cần login
- *  - mỗi cuộc = 1 supportId
+ * 2) SUPPORT CHAT (Đã fix role cho Admin)
  * ========================================= */
 
 // POST /api/chat/support/start
-// body: { name, email, content }
 export const startSupportChat = async (req, res) => {
   try {
     const { name, email, content } = req.body || {};
-    const user = req.user; // nếu có token thì ưu tiên gán cho user
+    const user = req.user;
 
     if (!user) {
-      // guest bắt buộc cần tối thiểu 1 kênh liên hệ
       if (!email && !name) {
-        return res.status(400).json({ message: "Name or email is required for guest" });
+        return res
+          .status(400)
+          .json({ message: "Name or email is required for guest" });
       }
     }
 
@@ -138,7 +149,8 @@ export const startSupportChat = async (req, res) => {
       return res.status(400).json({ message: "Content is required" });
     }
 
-    const supportId = "SUP-" + Math.random().toString(36).slice(2, 8).toUpperCase();
+    const supportId =
+      "SUP-" + Math.random().toString(36).slice(2, 8).toUpperCase();
 
     const role = user ? getRole(user) : "guest";
 
@@ -150,13 +162,13 @@ export const startSupportChat = async (req, res) => {
       name: user?.fullName || name || "",
       email: user?.email || email || "",
       content: content.trim(),
-      isSystem: false
+      isSystem: false,
     });
 
     res.status(201).json({
       message: "Support chat started",
       supportId,
-      firstMessage: msg
+      firstMessage: msg,
     });
   } catch (err) {
     res.status(500).json({ message: err.message });
@@ -168,7 +180,8 @@ export const getSupportMessages = async (req, res) => {
   try {
     const { supportId } = req.params;
     const msgs = await Chat.find({ roomType: "support", supportId })
-      .sort({ createdAt: 1 }).lean();
+      .sort({ createdAt: 1 })
+      .lean();
 
     if (!msgs.length) {
       return res.status(404).json({ message: "Support thread not found" });
@@ -181,7 +194,6 @@ export const getSupportMessages = async (req, res) => {
 };
 
 // POST /api/chat/support/:supportId
-// body: { content, name?, email? } (guest tiếp tục chat)
 export const sendSupportMessage = async (req, res) => {
   try {
     const { supportId } = req.params;
@@ -192,22 +204,30 @@ export const sendSupportMessage = async (req, res) => {
       return res.status(400).json({ message: "Content is required" });
     }
 
-    // kiểm tra thread tồn tại
     const exists = await Chat.exists({ roomType: "support", supportId });
-    if (!exists) return res.status(404).json({ message: "Support thread not found" });
+    if (!exists)
+      return res.status(404).json({ message: "Support thread not found" });
 
+    // --- ĐÂY LÀ CHỖ QUAN TRỌNG ĐỂ NHẬN DIỆN ADMIN ---
+    // Nhờ middleware optionalAuth, req.user sẽ có dữ liệu nếu là Admin
     const role = user ? getRole(user) : "guest";
 
-    const msg = await Chat.create({
+    const msgData = {
       roomType: "support",
       supportId,
       fromId: user ? new mongoose.Types.ObjectId(user.id) : undefined,
       fromRole: role,
-      name: user?.fullName || name || "",
-      email: user?.email || email || "",
       content: content.trim(),
-      isSystem: false
-    });
+      isSystem: false,
+    };
+
+    // Chỉ lưu name/email nếu là guest gửi
+    if (role === "guest") {
+      msgData.name = name || "";
+      msgData.email = email || "";
+    }
+
+    const msg = await Chat.create(msgData);
 
     res.status(201).json({ message: "Sent", data: msg });
   } catch (err) {
@@ -215,10 +235,8 @@ export const sendSupportMessage = async (req, res) => {
   }
 };
 
-
 /* =========================================
- *  3) TOUR GROUP CHAT (dành cho đã đặt tour)
- *  - Chỉ admin / leader / user có booking tour đó
+ * 3) TOUR GROUP CHAT
  * ========================================= */
 
 // GET /api/chat/tour/:tourId
@@ -233,7 +251,8 @@ export const getTourGroupMessages = async (req, res) => {
     if (!ok) return res.status(403).json({ message: "Forbidden" });
 
     const msgs = await Chat.find({ roomType: "tour", tourId })
-      .sort({ createdAt: 1 }).lean();
+      .sort({ createdAt: 1 })
+      .lean();
 
     res.json({ tourId, total: msgs.length, data: msgs });
   } catch (err) {
@@ -242,7 +261,6 @@ export const getTourGroupMessages = async (req, res) => {
 };
 
 // POST /api/chat/tour/:tourId
-// body: { content }
 export const sendTourGroupMessage = async (req, res) => {
   try {
     const { tourId } = req.params;
@@ -266,10 +284,148 @@ export const sendTourGroupMessage = async (req, res) => {
       fromId: new mongoose.Types.ObjectId(req.user.id),
       fromRole: role,
       content: content.trim(),
-      isSystem: false
+      isSystem: false,
     });
 
     res.status(201).json({ message: "Sent", data: msg });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+};
+
+/* =========================================
+ * 4) ADMIN APIs (Đã fix Join bảng để hiển thị tên user)
+ * ========================================= */
+
+// GET /api/chat/admin/support
+export const getAllSupportChats = async (req, res) => {
+  try {
+    const threads = await Chat.aggregate([
+      { $match: { roomType: "support" } },
+      { $sort: { createdAt: -1 } },
+      {
+        $group: {
+          _id: "$supportId",
+          supportId: { $first: "$supportId" },
+          name: { $max: "$name" },
+          email: { $max: "$email" },
+          lastMessage: { $first: "$content" },
+          lastTime: { $first: "$createdAt" },
+          messageCount: { $sum: 1 },
+        },
+      },
+      { $sort: { lastTime: -1 } },
+    ]);
+
+    res.json({ total: threads.length, data: threads });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+};
+
+// GET /api/chat/admin/bookings
+export const getAllBookingChats = async (req, res) => {
+  try {
+    const threads = await Chat.aggregate([
+      { $match: { roomType: "booking" } },
+      { $sort: { createdAt: -1 } },
+      {
+        $group: {
+          _id: "$bookingCode",
+          bookingCode: { $first: "$bookingCode" },
+          tourId: { $first: "$tourId" },
+          lastMessage: { $first: "$content" },
+          lastTime: { $first: "$createdAt" },
+          messageCount: { $sum: 1 },
+        },
+      },
+      { $sort: { lastTime: -1 } },
+      // Join Tour để lấy tên
+      {
+        $lookup: {
+          from: "tbl_tour", // ⚠️ CHECK TÊN COLLECTION DB CỦA BẠN (VD: tours hoặc tbl_tour)
+          localField: "tourId",
+          foreignField: "_id",
+          as: "tour",
+        },
+      },
+      // Join Booking để lấy userId
+      {
+        $lookup: {
+          from: "tbl_booking", // ⚠️ CHECK TÊN COLLECTION DB
+          localField: "bookingCode",
+          foreignField: "code",
+          as: "bookingInfo",
+        },
+      },
+      { $unwind: { path: "$bookingInfo", preserveNullAndEmptyArrays: true } },
+      // Join User để lấy tên khách
+      {
+        $lookup: {
+          from: "tbl_user", // ⚠️ CHECK TÊN COLLECTION DB
+          localField: "bookingInfo.userId",
+          foreignField: "_id",
+          as: "userInfo",
+        },
+      },
+      { $unwind: { path: "$userInfo", preserveNullAndEmptyArrays: true } },
+      {
+        $project: {
+          bookingCode: 1,
+          tourId: 1,
+          lastMessage: 1,
+          lastTime: 1,
+          messageCount: 1,
+          tourTitle: { $arrayElemAt: ["$tour.title", 0] },
+          name: { $ifNull: ["$userInfo.fullName", "Khách hàng"] },
+          email: { $ifNull: ["$userInfo.email", ""] },
+        },
+      },
+    ]);
+
+    res.json({ total: threads.length, data: threads });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+};
+
+// GET /api/chat/admin/tours
+export const getAllTourChats = async (req, res) => {
+  try {
+    const threads = await Chat.aggregate([
+      { $match: { roomType: "tour" } },
+      { $sort: { createdAt: -1 } },
+      {
+        $group: {
+          _id: "$tourId",
+          tourId: { $first: "$tourId" },
+          lastMessage: { $first: "$content" },
+          lastTime: { $first: "$createdAt" },
+          messageCount: { $sum: 1 },
+        },
+      },
+      { $sort: { lastTime: -1 } },
+      {
+        $lookup: {
+          from: "tbl_tour", // ⚠️ CHECK TÊN COLLECTION DB
+          localField: "tourId",
+          foreignField: "_id",
+          as: "tour",
+        },
+      },
+      {
+        $addFields: {
+          tourTitle: { $arrayElemAt: ["$tour.title", 0] },
+        },
+      },
+      {
+        $project: {
+          tour: 0,
+        },
+      },
+    ]);
+
+    res.json({ total: threads.length, data: threads });
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
