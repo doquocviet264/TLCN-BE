@@ -2,7 +2,7 @@ import bcrypt from "bcryptjs";
 import { User } from "../models/User.js";
 import fs from "node:fs";
 import path from "node:path";
-import cloudinary from "../config/cloudinary.js"; 
+import cloudinary from "../config/cloudinary.js";
 
 export const getMyProfile = async (req, res) => {
   try {
@@ -34,7 +34,8 @@ export const updateMyProfile = async (req, res) => {
     if (username && username !== user.username) {
       // có thể thêm regex chặn ký tự lạ
       const exist = await User.findOne({ username });
-      if (exist) return res.status(400).json({ message: "Username already taken" });
+      if (exist)
+        return res.status(400).json({ message: "Username already taken" });
       user.username = username;
     }
 
@@ -57,18 +58,23 @@ export const changePassword = async (req, res) => {
   try {
     const { oldPassword, newPassword } = req.body;
     if (!oldPassword || !newPassword) {
-      return res.status(400).json({ message: "oldPassword and newPassword are required" });
+      return res
+        .status(400)
+        .json({ message: "oldPassword and newPassword are required" });
     }
 
     const user = await User.findById(req.user.id);
     if (!user) return res.status(404).json({ message: "User not found" });
 
     if (!user.password) {
-      return res.status(400).json({ message: "This account uses Google Login" });
+      return res
+        .status(400)
+        .json({ message: "This account uses Google Login" });
     }
 
     const ok = await bcrypt.compare(oldPassword, user.password);
-    if (!ok) return res.status(400).json({ message: "Old password is incorrect" });
+    if (!ok)
+      return res.status(400).json({ message: "Old password is incorrect" });
 
     user.password = await bcrypt.hash(newPassword, 10);
     await user.save();
@@ -80,9 +86,15 @@ export const changePassword = async (req, res) => {
 };
 
 function baseUrl(req) {
-  if (process.env.BASE_URL) return process.env.BASE_URL.replace(/\/+$/,"");
-  const proto = (req.headers["x-forwarded-proto"] || req.protocol || "http");
-  const host  = req.headers["x-forwarded-host"]  || req.get("host");
+  // 1. Ưu tiên dùng BASE_URL từ .env (production)
+  if (process.env.BASE_URL) {
+    return process.env.BASE_URL.replace(/\/+$/, "");
+  }
+
+  // 2. Dev mode: dùng req.get("host") chứ không phải x-forwarded-host
+  // (vì x-forwarded-host có thể bị override bởi proxy/tunnel)
+  const proto = req.protocol || "http";
+  const host = req.get("host");
   return `${proto}://${host}`;
 }
 
@@ -99,8 +111,8 @@ export const uploadMyAvatar = async (req, res) => {
       fs.existsSync(p) && fs.unlink(p, () => {});
     }
 
-    const urlPath = `/uploads/avatars/${req.file.filename}`;       // path public
-    me.avatar = urlPath;                                           // lưu path (FE tự prepend domain)
+    const urlPath = `/uploads/avatars/${req.file.filename}`; // path public
+    me.avatar = urlPath; // lưu path (FE tự prepend domain)
     await me.save();
 
     const safe = me.toObject();
@@ -109,8 +121,8 @@ export const uploadMyAvatar = async (req, res) => {
     res.json({
       message: "Avatar updated",
       avatarPath: urlPath,
-      avatarUrl: `${baseUrl(req)}${urlPath}`,  // tiện cho FE test
-      user: safe
+      avatarUrl: `${baseUrl(req)}${urlPath}`, // tiện cho FE test
+      user: safe,
     });
   } catch (err) {
     res.status(500).json({ message: err.message });
@@ -136,10 +148,13 @@ export const uploadMyAvatarCloud = async (req, res) => {
 
     // Xoá ảnh cũ nếu có
     if (me.avatarPublicId) {
-      try { await cloudinary.uploader.destroy(me.avatarPublicId); } catch {}
+      try {
+        await cloudinary.uploader.destroy(me.avatarPublicId);
+      } catch {}
     }
 
-    me.avatarUrl      = uploadResult.secure_url;
+    // Lưu vào schema field chính (avatar), không phải avatarUrl
+    me.avatar = uploadResult.secure_url;
     me.avatarPublicId = uploadResult.public_id;
     await me.save();
 
@@ -148,7 +163,7 @@ export const uploadMyAvatarCloud = async (req, res) => {
 
     res.json({
       message: "Avatar updated",
-      avatarUrl: me.avatarUrl,
+      avatarUrl: me.avatar, // Trả về avatar URL từ Cloudinary
       publicId: me.avatarPublicId,
       user: safe,
     });
@@ -190,7 +205,7 @@ export const getAllUsers = async (req, res) => {
       page: parseInt(page),
       limit: parseInt(limit),
       pages: Math.ceil(total / parseInt(limit)),
-      data
+      data,
     });
   } catch (err) {
     res.status(500).json({ message: err.message });
@@ -212,17 +227,22 @@ export const getUserById = async (req, res) => {
 /** Tạo user mới (admin) */
 export const createUserAdmin = async (req, res) => {
   try {
-    const { email, username, fullName, password, phoneNumber, address } = req.body;
+    const { email, username, fullName, password, phoneNumber, address } =
+      req.body;
 
     if (!email || !username || !password) {
-      return res.status(400).json({ message: "email, username, password are required" });
+      return res
+        .status(400)
+        .json({ message: "email, username, password are required" });
     }
 
     const existEmail = await User.findOne({ email: email.toLowerCase() });
-    if (existEmail) return res.status(400).json({ message: "Email already exists" });
+    if (existEmail)
+      return res.status(400).json({ message: "Email already exists" });
 
     const existUsername = await User.findOne({ username });
-    if (existUsername) return res.status(400).json({ message: "Username already exists" });
+    if (existUsername)
+      return res.status(400).json({ message: "Username already exists" });
 
     const hashedPassword = await bcrypt.hash(password, 10);
 
@@ -257,13 +277,15 @@ export const updateUserAdmin = async (req, res) => {
 
     if (email && email !== user.email) {
       const exist = await User.findOne({ email: email.toLowerCase() });
-      if (exist) return res.status(400).json({ message: "Email already exists" });
+      if (exist)
+        return res.status(400).json({ message: "Email already exists" });
       user.email = email.toLowerCase();
     }
 
     if (username && username !== user.username) {
       const exist = await User.findOne({ username });
-      if (exist) return res.status(400).json({ message: "Username already exists" });
+      if (exist)
+        return res.status(400).json({ message: "Username already exists" });
       user.username = username;
     }
 
