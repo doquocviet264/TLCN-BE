@@ -3,7 +3,7 @@ import { auth, adminOnly } from "../middleware/auth.js";
 import { 
   getMyProfile, updateMyProfile, changePassword,
   uploadMyAvatar, uploadMyAvatarCloud,
-  getAllUsers, getUserById, createUserAdmin, updateUserAdmin, resetUserPassword, deleteUser
+  getAllUsers, getUserById, createUserAdmin, updateUserAdmin, resetUserPassword, deleteUser, toggleUserStatus
 } from "../controllers/user.controller.js";
 import { uploadAvatarMulter, uploadAvatarMem } from "../middleware/upload.js";
 import { passwordValidator } from "../utils/passwordValidator.js";
@@ -59,7 +59,10 @@ router.put(
     body("avatar").optional().isURL().withMessage("avatar phải là URL hợp lệ"),
     body("username").optional()
       .isLength({ min: 3, max: 32 }).withMessage("username 3-32 kí tự")
-      .matches(/^[a-zA-Z0-9_]+$/).withMessage("username chỉ gồm chữ, số, _")
+      .matches(/^[a-zA-Z0-9_]+$/).withMessage("username chỉ gồm chữ, số, _"),
+    body("gender").optional().isIn(["Male", "Female", "Other"]).withMessage("Giới tính không hợp lệ"),
+    body("dob").optional({ nullable: true }).isISO8601().toDate().withMessage("Ngày sinh không hợp lệ"),
+    body("city").optional().isString().withMessage("Thành phố phải là chuỗi")
   ],
   validate,
   updateMyProfile
@@ -174,8 +177,8 @@ router.post("/me/avatarcloud", auth, uploadAvatarMem.single("avatar"), uploadMyA
  *         name: search
  *         schema: { type: string }
  *       - in: query
- *         name: role
- *         schema: { type: string, enum: [user, admin, leader] }
+ *         name: status
+ *         schema: { type: string, enum: [active, inactive] }
  *     responses:
  *       200: { description: OK }
  */
@@ -218,7 +221,6 @@ router.get("/:id", auth, adminOnly, getUserById);
  *               fullName: { type: string, example: "Nguyen Van A" }
  *               phoneNumber: { type: string, example: "0912345678" }
  *               address: { type: string, example: "Hà Nội" }
- *               role: { type: string, enum: [user, admin, leader], default: user }
  *     responses:
  *       201: { description: User created }
  */
@@ -232,7 +234,6 @@ router.post(
     body("password").custom(passwordValidator),
     body("fullName").optional().isLength({ min: 2, max: 100 }).withMessage("fullName 2-100 kí tự"),
     body("phoneNumber").optional({ nullable: true, checkFalsy: true }).matches(/^(?:\+?84|0)(?:3|5|7|8|9)\d{8}$/).withMessage("Số điện thoại VN không hợp lệ"),
-    body("role").optional().isIn(["user", "admin", "leader"]).withMessage("Role không hợp lệ"),
   ],
   validate,
   createUserAdmin
@@ -261,7 +262,6 @@ router.post(
  *               fullName: { type: string }
  *               phoneNumber: { type: string }
  *               address: { type: string }
- *               role: { type: string, enum: [user, admin, leader] }
  *     responses:
  *       200: { description: User updated }
  */
@@ -274,7 +274,6 @@ router.put(
     body("username").optional().isLength({ min: 3, max: 32 }).withMessage("Username 3-32 kí tự"),
     body("fullName").optional().isLength({ min: 2, max: 100 }).withMessage("fullName 2-100 kí tự"),
     body("phoneNumber").optional({ nullable: true, checkFalsy: true }).matches(/^(?:\+?84|0)(?:3|5|7|8|9)\d{8}$/).withMessage("Số điện thoại VN không hợp lệ"),
-    body("role").optional().isIn(["user", "admin", "leader"]).withMessage("Role không hợp lệ"),
   ],
   validate,
   updateUserAdmin
@@ -327,5 +326,21 @@ router.patch(
  *       200: { description: User deleted }
  */
 router.delete("/:id", auth, adminOnly, deleteUser);
+
+/**
+ * @openapi
+ * /api/users/{id}/toggle-status:
+ *   patch:
+ *     tags: [Users]
+ *     summary: Khóa/Mở khóa user (admin only)
+ *     security: [ { bearerAuth: [] } ]
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         schema: { type: string }
+ *     responses:
+ *       200: { description: OK }
+ */
+router.patch("/:id/toggle-status", auth, adminOnly, toggleUserStatus);
 
 export default router;

@@ -8,6 +8,11 @@ export const getMyProfile = async (req, res) => {
   try {
     const me = await User.findById(req.user.id).select("-password").lean();
     if (!me) return res.status(404).json({ message: "User not found" });
+    
+    const secInfo = await User.findById(req.user.id).select("password google_id").lean();
+    me.hasPassword = !!secInfo.password;
+    me.isGoogleLogin = !!secInfo.google_id;
+
     res.json(me);
   } catch (err) {
     res.status(500).json({ message: err.message });
@@ -16,14 +21,17 @@ export const getMyProfile = async (req, res) => {
 
 export const updateMyProfile = async (req, res) => {
   try {
-    const { fullName, phoneNumber, address, avatar, username } = req.body;
+    const { fullName, phoneNumber, address, avatar, username, gender, dob, city } = req.body;
 
     if (
       fullName === undefined &&
       phoneNumber === undefined &&
       address === undefined &&
       avatar === undefined &&
-      username === undefined
+      username === undefined &&
+      gender === undefined &&
+      dob === undefined &&
+      city === undefined
     ) {
       return res.status(400).json({ message: "No fields to update" });
     }
@@ -43,6 +51,9 @@ export const updateMyProfile = async (req, res) => {
     if (phoneNumber !== undefined) user.phoneNumber = phoneNumber;
     if (address !== undefined) user.address = address;
     if (avatar !== undefined) user.avatar = avatar;
+    if (gender !== undefined) user.gender = gender;
+    if (dob !== undefined) user.dob = dob;
+    if (city !== undefined) user.city = city;
 
     await user.save();
 
@@ -179,7 +190,7 @@ export const uploadMyAvatarCloud = async (req, res) => {
 /** Lấy danh sách tất cả users */
 export const getAllUsers = async (req, res) => {
   try {
-    const { page = 1, limit = 20, search = "", role = "" } = req.query;
+    const { page = 1, limit = 20, search = "", status = "" } = req.query;
     const skip = (parseInt(page) - 1) * parseInt(limit);
 
     const filter = {};
@@ -190,7 +201,10 @@ export const getAllUsers = async (req, res) => {
         { username: { $regex: search, $options: "i" } },
       ];
     }
-    if (role) filter.role = role;
+    if (status) {
+      if (status === "active") filter.isActive = "y";
+      else if (status === "inactive") filter.isActive = "n";
+    }
 
     const total = await User.countDocuments(filter);
     const data = await User.find(filter)
@@ -333,6 +347,31 @@ export const deleteUser = async (req, res) => {
     const user = await User.findByIdAndDelete(id);
     if (!user) return res.status(404).json({ message: "User not found" });
     res.json({ message: "User deleted" });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+};
+
+/** Khóa/Mở Khóa user (admin) */
+export const toggleUserStatus = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const user = await User.findById(id);
+    if (!user) return res.status(404).json({ message: "User not found" });
+
+    // Đảo trạng thái: y -> n, n -> y
+    user.isActive = user.isActive === "y" ? "n" : "y";
+    // Tự động gỡ bỏ/thiết lập lockUntil nếu cần (khi unban thì mở luôn lock)
+    if (user.isActive === "y") {
+      user.lockUntil = undefined;
+      user.loginAttempts = 0;
+    }
+
+    await user.save();
+    res.json({ 
+      message: user.isActive === "y" ? "Đã mở khóa người dùng" : "Đã khóa người dùng",
+      isActive: user.isActive
+    });
   } catch (err) {
     res.status(500).json({ message: err.message });
   }

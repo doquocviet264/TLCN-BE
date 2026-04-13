@@ -15,17 +15,29 @@ export const getTours = async (req, res) => {
           .trim()
           .replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
     );
-  if (title) filter.title = { $regex: title, $options: "i" };
+  // Lấy thời điểm bắt đầu ngày hôm nay
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
 
   const p = Math.max(parseInt(page, 10) || 1, 1);
   const l = Math.min(parseInt(limit, 10) || 10, 50);
 
+  const pipeline = [
+    { $match: filter },
+    {
+      $addFields: {
+        isPast: {
+          $cond: [{ $lt: ["$startDate", today] }, 1, 0]
+        }
+      }
+    },
+    { $sort: { isPast: 1, startDate: 1, _id: 1 } },
+    { $skip: (p - 1) * l },
+    { $limit: l }
+  ];
+
   const [data, total] = await Promise.all([
-    Tour.find(filter)
-      .sort({ startDate: 1, _id: 1 })
-      .skip((p - 1) * l)
-      .limit(l)
-      .lean(),
+    Tour.aggregate(pipeline),
     Tour.countDocuments(filter),
   ]);
 
@@ -217,9 +229,9 @@ export const searchTours = async (req, res) => {
     const qStr = q?.trim();
     if (qStr) {
       filter.$or = [
-        { title: { $regex: qStr, $options: "i" } },
-        { description: { $regex: qStr, $options: "i" } },
-        { destination: { $regex: qStr, $options: "i" } },
+        { title: { $regex: new RegExp(escapeRegex(qStr), "i") } },
+        { description: { $regex: new RegExp(escapeRegex(qStr), "i") } },
+        { destination: { $regex: new RegExp(escapeRegex(qStr), "i") } },
       ];
       // Nếu đã tạo text index:
       // filter.$text = { $search: qStr };
@@ -244,6 +256,7 @@ export const searchTours = async (req, res) => {
       if (to)
         filter.endDate = { ...(filter.endDate || {}), $lte: new Date(to) };
     }
+    // (Bỏ điều kiện "Mặc định: loại bỏ tour trong quá khứ")
 
     // ngân sách theo priceAdult
     const min = budgetMin !== undefined ? Number(budgetMin) : undefined;
@@ -257,14 +270,25 @@ export const searchTours = async (req, res) => {
     const p = Math.max(parseInt(page, 10) || 1, 1);
     const l = Math.min(parseInt(limit, 10) || 10, 50);
 
-    // Nếu muốn nhẹ payload danh sách, có thể .select("-itinerary")
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    const pipeline = [
+      { $match: filter },
+      {
+        $addFields: {
+          isPast: {
+            $cond: [{ $lt: ["$startDate", today] }, 1, 0]
+          }
+        }
+      },
+      { $sort: { isPast: 1, startDate: 1, _id: 1 } },
+      { $skip: (p - 1) * l },
+      { $limit: l }
+    ];
+
     const [data, total] = await Promise.all([
-      Tour.find(filter)
-        .sort({ startDate: 1, _id: 1 })
-        // .select("-itinerary") // bật nếu muốn trả nhẹ ở trang list
-        .skip((p - 1) * l)
-        .limit(l)
-        .lean(),
+      Tour.aggregate(pipeline),
       Tour.countDocuments(filter),
     ]);
 

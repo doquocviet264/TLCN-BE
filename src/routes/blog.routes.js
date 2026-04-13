@@ -1,6 +1,7 @@
 // src/routes/blog.routes.js
 import { Router } from "express";
-import { auth, adminOnly } from "../middleware/auth.js";
+import { auth, adminOnly, optionalAuth } from "../middleware/auth.js";
+import { uploadBlogMem } from "../middleware/upload.js";
 import {
   listPublicPosts,
   getPostBySlug,
@@ -10,10 +11,17 @@ import {
   updatePost,
   deletePost,
   updatePostStatus,
+  syncAllRatings,
   listComments,
   addComment,
   updateComment,
-  deleteComment
+  deleteComment,
+  createPostUser,
+  getMyPosts,
+  updateOwnPost,
+  deleteOwnPost,
+  previewOwnPost,
+  getOwnPostById
 } from "../controllers/blog.controller.js";
 
 const router = Router();
@@ -116,7 +124,7 @@ const router = Router();
  *       200:
  *         description: OK
  */
-router.get("/", listPublicPosts);
+router.get("/", optionalAuth, listPublicPosts);
 
 /**
  * @openapi
@@ -138,6 +146,13 @@ router.get("/", listPublicPosts);
  */
 router.get("/:slug", getPostBySlug);
 
+/** ========== USER ROUTES ========== */
+router.post("/user", auth, uploadBlogMem.single("cover"), createPostUser);
+router.get("/user/my-posts", auth, getMyPosts);
+router.get("/user/preview/:slug", auth, previewOwnPost);
+router.get("/user/:id", auth, getOwnPostById);
+router.put("/user/:id", auth, uploadBlogMem.single("cover"), updateOwnPost);
+router.delete("/user/:id", auth, deleteOwnPost);
 /**
  * @openapi
  * /api/blog/admin/list:
@@ -301,6 +316,9 @@ router.delete("/admin/:id", auth, adminOnly, deletePost);
  *         description: Status updated
  */
 router.patch("/admin/:id/status", auth, adminOnly, updatePostStatus);
+
+// POST /api/blog/admin/sync-ratings — chạy 1 lần để migrate rating từ data cũ
+router.post("/admin/sync-ratings", auth, adminOnly, syncAllRatings);
 
 /**
  * @openapi

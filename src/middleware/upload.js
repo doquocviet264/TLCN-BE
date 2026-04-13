@@ -35,3 +35,12 @@ export const uploadAvatarMem = multer({
     cb(ok ? null : new Error("Invalid image type"), ok);
   }
 });
+
+export const uploadBlogMem = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 5 * 1024 * 1024 }, // 5MB
+  fileFilter: (_req, file, cb) => {
+    const ok = ["image/png","image/jpg","image/jpeg","image/webp"].includes(file.mimetype);
+    cb(ok ? null : new Error("Invalid image type"), ok);
+  }
+});

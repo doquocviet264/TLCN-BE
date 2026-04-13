@@ -19,6 +19,7 @@ import chatRoutes from "./routes/chat.routes.js";
 import { swaggerSpec } from "./config/swagger.js";
 import blogRouter from "./routes/blog.routes.js";
 import checkinRoutes from "./routes/checkin.routes.js"; // <--- Import file vừa tạo
+import wardRoutes from "./routes/ward.routes.js";
 
 import { registerConfirmOrRefundJob } from "./jobs/confirmOrRefund.job.js";
 
@@ -100,6 +101,7 @@ app.use("/api/reviews", reviewRoutes);
 app.use("/api/chat", chatRoutes);
 app.use("/api/blog", blogRouter);
 app.use("/api/checkins", checkinRoutes);
+app.use("/api/wards", wardRoutes);
 
 /* =========================
  *  404 FALLBACK

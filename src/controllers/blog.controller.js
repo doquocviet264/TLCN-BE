@@ -1,18 +1,21 @@
 // src/controllers/blog.controller.js
 import mongoose from "mongoose";
 import { BlogPost } from "../models/BlogPost.js";
+import { BlogComment } from "../models/BlogComment.js";
+import cloudinary from "../config/cloudinary.js";
 
 /** Helper: tính lại ratingAvg & ratingCount */
-function recalcRating(post) {
-  const list = post.comments || [];
-  if (!list.length) {
-    post.ratingAvg = 0;
-    post.ratingCount = 0;
-    return;
-  }
-  const sum = list.reduce((s, c) => s + (c.rating || 0), 0);
-  post.ratingCount = list.length;
-  post.ratingAvg = sum / list.length;
+async function recalcGlobalRating(blogId) {
+  const result = await BlogComment.aggregate([
+    { $match: { blogId: new mongoose.Types.ObjectId(blogId) } },
+    { $group: { _id: null, ratingAvg: { $avg: "$rating" }, ratingCount: { $sum: 1 } } }
+  ]);
+  const stats = result[0] || { ratingAvg: 0, ratingCount: 0 };
+  await BlogPost.findByIdAndUpdate(blogId, {
+    ratingAvg: stats.ratingAvg,
+    ratingCount: stats.ratingCount
+  });
+  return stats;
 }
 
 /** ========== PUBLIC ========== */
@@ -21,38 +24,96 @@ function recalcRating(post) {
 export const listPublicPosts = async (req, res) => {
   const page  = Math.max(parseInt(req.query.page || "1", 10), 1);
   const limit = Math.min(parseInt(req.query.limit || "10", 10), 50);
-  const { q, tag } = req.query;
+  const { q, tag, category } = req.query;
 
-  const filter = { status: "published" };
+  const filter = {
+    $or: [{ status: "published", privacy: "public" }]
+  };
+  if (req.user) {
+    filter.$or.push({ authorId: req.user.id, authorModel: "User" });
+  }
   if (q && q.trim()) {
     const regex = new RegExp(q.trim(), "i");
-    filter.$or = [
-      { title: regex },
-      { summary: regex },
-      { content: regex }
-    ];
+    filter.$and = filter.$and || [];
+    filter.$and.push({
+      $or: [
+        { title: regex },
+        { summary: regex },
+        { content: regex },
+        { tags: regex }
+      ]
+    });
   }
   if (tag) {
-    filter.tags = tag;
+    filter.$and = filter.$and || [];
+    filter.$and.push({ tags: new RegExp(tag, "i") });
+  }
+  if (category) {
+    filter.$and = filter.$and || [];
+    filter.$and.push({ categories: category });
   }
 
-  const [data, total] = await Promise.all([
+  const [data, total, totalComments, allAuthorsResult] = await Promise.all([
     BlogPost.find(filter)
       .sort({ publishedAt: -1, createdAt: -1 })
       .skip((page - 1) * limit)
       .limit(limit)
+      .populate("authorId", "firstName lastName fullName email avatar avatarUrl")
       .lean(),
-    BlogPost.countDocuments(filter)
+    BlogPost.countDocuments(filter),
+    BlogComment.countDocuments(),
+    BlogPost.distinct("authorId", { status: "published" })
   ]);
 
-  res.json({ total, page, limit, data });
+  const totalAuthors = allAuthorsResult.length;
+
+  const blogIds = data.map(post => post._id);
+  const commentsCounts = await BlogComment.aggregate([
+    { $match: { blogId: { $in: blogIds } } },
+    { $group: { _id: "$blogId", count: { $sum: 1 } } }
+  ]);
+  const commentsMap = {};
+  commentsCounts.forEach(c => commentsMap[c._id.toString()] = c.count);
+
+  const formattedData = data.map(post => {
+      let authorObj = { name: "Admin", avatar: "/Logo.svg" };
+      if (post.authorId && typeof post.authorId === "object") {
+        authorObj.name = `${post.authorId.firstName || ""} ${post.authorId.lastName || ""}`.trim() || post.authorId.fullName || post.authorId.email || "Admin";
+        authorObj.avatar = post.authorId.avatar || post.authorId.avatarUrl || "/Logo.svg";
+      }
+      post.author = authorObj;
+      post.commentsCount = commentsMap[post._id.toString()] || 0;
+      return post;
+  });
+
+  res.json({ total, page, limit, totalComments, totalAuthors, data: formattedData });
 };
 
 // GET /api/blog/:slug
 export const getPostBySlug = async (req, res) => {
   const { slug } = req.params;
-  const post = await BlogPost.findOne({ slug, status: "published" }).lean();
+  const post = await BlogPost.findOne({ slug, status: "published", privacy: "public" })
+    .populate("authorId", "firstName lastName fullName email avatar avatarUrl")
+    .lean();
   if (!post) return res.status(404).json({ message: "Post not found" });
+
+  // Định dạng lại tên author
+  let authorObj = { name: "Admin", avatar: "/Logo.svg" };
+  if (post.authorId && typeof post.authorId === "object") {
+    authorObj.name = `${post.authorId.firstName || ""} ${post.authorId.lastName || ""}`.trim() || post.authorId.fullName || post.authorId.email || "Admin";
+    authorObj.avatar = post.authorId.avatar || post.authorId.avatarUrl || "/Logo.svg";
+  }
+  post.author = authorObj;
+
+  // Tính LIVE rating từ BlogComment (thay vì dùng giá trị cũ lưu trong BlogPost)
+  const ratingResult = await BlogComment.aggregate([
+    { $match: { blogId: post._id } },
+    { $group: { _id: null, ratingAvg: { $avg: "$rating" }, ratingCount: { $sum: 1 } } }
+  ]);
+  const ratingStats = ratingResult[0] || { ratingAvg: 0, ratingCount: 0 };
+  post.ratingAvg = ratingStats.ratingAvg ? Math.round(ratingStats.ratingAvg * 10) / 10 : 0;
+  post.ratingCount = ratingStats.ratingCount;
+
   res.json(post);
 };
 
@@ -72,6 +133,7 @@ export const listAllPostsAdmin = async (req, res) => {
       .sort({ createdAt: -1 })
       .skip((page - 1) * limit)
       .limit(limit)
+      .populate("authorId", "firstName lastName fullName email avatar avatarUrl")
       .lean(),
     BlogPost.countDocuments(filter)
   ]);
@@ -97,13 +159,14 @@ export const getPostByIdAdmin = async (req, res) => {
 // POST /api/blog/admin
 export const createPost = async (req, res) => {
   try {
-    const { title, summary, content, tags, coverImageUrl, coverImagePublicId, status } = req.body;
+    const { title, summary, content, tags, categories, coverImageUrl, coverImagePublicId, status } = req.body;
 
     const post = new BlogPost({
       title,
       summary,
       content,
       tags,
+      categories,
       coverImageUrl,
       coverImagePublicId,
       authorId: req.user?.id,              // admin hiện tại
@@ -159,19 +222,45 @@ export const deletePost = async (req, res) => {
   }
 };
 
+/** ========== ADMIN: MIGRATION UTILS ========== */
+
+// POST /api/blog/admin/sync-ratings
+// Chạy 1 lần để sync toàn bộ ratingAvg/ratingCount từ BlogComment vào BlogPost
+export const syncAllRatings = async (req, res) => {
+  try {
+    const posts = await BlogPost.find({}).select("_id").lean();
+    let updated = 0;
+    for (const post of posts) {
+      const result = await BlogComment.aggregate([
+        { $match: { blogId: post._id } },
+        { $group: { _id: null, ratingAvg: { $avg: "$rating" }, ratingCount: { $sum: 1 } } }
+      ]);
+      const stats = result[0] || { ratingAvg: 0, ratingCount: 0 };
+      await BlogPost.findByIdAndUpdate(post._id, {
+        ratingAvg: stats.ratingAvg ? Math.round(stats.ratingAvg * 10) / 10 : 0,
+        ratingCount: stats.ratingCount
+      });
+      updated++;
+    }
+    res.json({ message: `Synced ${updated} posts OK` });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+};
+
 /** ========== ADMIN: UPDATE STATUS ========== */
 
 // PATCH /api/blog/admin/:id/status
 export const updatePostStatus = async (req, res) => {
   try {
     const { id } = req.params;
-    const { status } = req.body;
+    const { status, rejectReason } = req.body;
 
     if (!mongoose.isValidObjectId(id)) {
       return res.status(400).json({ message: "Invalid id" });
     }
 
-    const ALLOWED = ["draft", "published", "archived"];
+    const ALLOWED = ["draft", "pending", "published", "archived", "rejected"];
     if (!ALLOWED.includes(status)) {
       return res.status(400).json({ message: "Invalid status" });
     }
@@ -183,9 +272,11 @@ export const updatePostStatus = async (req, res) => {
     if (status === "published" && !post.publishedAt) {
       post.publishedAt = new Date();
     }
-    if (status !== "published") {
-      // tuỳ em: có thể giữ publishedAt hoặc clear
-      // post.publishedAt = null;
+    if (status === "rejected" && rejectReason) {
+      post.rejectReason = rejectReason;
+    }
+    if (status !== "rejected") {
+      post.rejectReason = ""; // clear reject reason if status changes
     }
 
     await post.save();
@@ -195,16 +286,256 @@ export const updatePostStatus = async (req, res) => {
   }
 };
 
+/** ========== USER CRUD ========== */
+
+// POST /api/blog/user
+export const createPostUser = async (req, res) => {
+  try {
+    const { title, summary, content, tags, categories, coverImageUrl, coverImagePublicId, privacy, locationDetail, province, ward } = req.body;
+
+    // Handle stringified arrays from FormData if necessary
+    let parsedTags = tags;
+    if (typeof tags === 'string') {
+      try { parsedTags = JSON.parse(tags); } catch (e) { parsedTags = [tags]; }
+    }
+
+    let parsedCategories = categories;
+    if (typeof categories === 'string') {
+      try { parsedCategories = JSON.parse(categories); } catch (e) { parsedCategories = [categories]; }
+    }
+
+    // Xử lý upload ảnh qua Cloudinary nếu có req.file
+    let uploadedCoverUrl = coverImageUrl;
+    let uploadedCoverPublicId = coverImagePublicId;
+
+    if (req.file) {
+      const folder = process.env.CLOUDINARY_FOLDER || "travela/blogs";
+      const uploadResult = await new Promise((resolve, reject) => {
+        const stream = cloudinary.uploader.upload_stream(
+          { folder, resource_type: "image", overwrite: true },
+          (err, result) => (err ? reject(err) : resolve(result))
+        );
+        stream.end(req.file.buffer);
+      });
+      uploadedCoverUrl = uploadResult.secure_url;
+      uploadedCoverPublicId = uploadResult.public_id;
+    }
+
+    const post = new BlogPost({
+      title,
+      summary,
+      content,
+      tags: parsedTags,
+      categories: parsedCategories,
+      coverImageUrl: uploadedCoverUrl,
+      coverImagePublicId: uploadedCoverPublicId,
+      authorId: req.user?.id,
+      authorModel: "User",
+      privacy: privacy || "public",
+      locationDetail,
+      province,
+      ward,
+      status: privacy === "private" ? "published" : "pending" // If private, it can be published immediately. If public, needs approval.
+    });
+
+    if (post.status === "published") {
+      post.publishedAt = new Date();
+    }
+
+    await post.save();
+    res.status(201).json({ message: "Created", post, slug: post.slug });
+  } catch (err) {
+    console.error("[createPostUser] Error:", err);
+    res.status(500).json({ message: err.message });
+  }
+};
+
+// GET /api/blog/user/my-posts
+export const getMyPosts = async (req, res) => {
+  try {
+    const page  = Math.max(parseInt(req.query.page || "1", 10), 1);
+    const limit = Math.min(parseInt(req.query.limit || "10", 10), 50);
+
+    const filter = { authorId: req.user.id, authorModel: "User" };
+
+    const [data, total] = await Promise.all([
+      BlogPost.find(filter)
+        .sort({ createdAt: -1 })
+        .skip((page - 1) * limit)
+        .limit(limit)
+        .populate("authorId", "firstName lastName fullName email avatar avatarUrl")
+        .lean(),
+      BlogPost.countDocuments(filter)
+    ]);
+
+    res.json({ total, page, limit, data });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+};
+
+// PUT /api/blog/user/:id
+export const updateOwnPost = async (req, res) => {
+  try {
+    const { id } = req.params;
+    if (!mongoose.isValidObjectId(id)) {
+      return res.status(400).json({ message: "Invalid id" });
+    }
+
+    const post = await BlogPost.findOne({ _id: id, authorId: req.user.id, authorModel: "User" });
+    if (!post) {
+      return res.status(404).json({ message: "Post not found or unauthorized" });
+    }
+
+    const { title, summary, content, tags, categories, coverImageUrl, coverImagePublicId, privacy, locationDetail, province, ward } = req.body;
+
+    let parsedTags = tags;
+    if (tags && typeof tags === 'string') {
+      try { parsedTags = JSON.parse(tags); } catch (e) { parsedTags = [tags]; }
+    }
+
+    let parsedCategories = categories;
+    if (categories && typeof categories === 'string') {
+      try { parsedCategories = JSON.parse(categories); } catch (e) { parsedCategories = [categories]; }
+    }
+
+    if (title) post.title = title;
+    if (summary !== undefined) post.summary = summary;
+    if (content !== undefined) post.content = content;
+    if (parsedTags) post.tags = parsedTags;
+    if (parsedCategories) post.categories = parsedCategories;
+    if (coverImageUrl) post.coverImageUrl = coverImageUrl;
+    if (coverImagePublicId) post.coverImagePublicId = coverImagePublicId;
+
+    // Nếu người dùng upload cover mới
+    if (req.file) {
+      const folder = process.env.CLOUDINARY_FOLDER || "travela/blogs";
+      const uploadResult = await new Promise((resolve, reject) => {
+        const stream = cloudinary.uploader.upload_stream(
+          { folder, resource_type: "image", overwrite: true },
+          (err, result) => (err ? reject(err) : resolve(result))
+        );
+        stream.end(req.file.buffer);
+      });
+      
+      // Xoá ảnh cũ để dọn dẹp bộ nhớ Cloudinary
+      if (post.coverImagePublicId) {
+        try {
+          await cloudinary.uploader.destroy(post.coverImagePublicId);
+        } catch (e) {}
+      }
+
+      post.coverImageUrl = uploadResult.secure_url;
+      post.coverImagePublicId = uploadResult.public_id;
+    }
+
+    if (privacy) post.privacy = privacy;
+    if (locationDetail !== undefined) post.locationDetail = locationDetail;
+    if (province !== undefined) post.province = province;
+    if (ward !== undefined) post.ward = ward;
+
+    // Reset status to pending if updated from rejected or published (for public posts)
+    if (post.privacy === "public") {
+      post.status = "pending";
+      post.rejectReason = "";
+    } else if (post.privacy === "private") {
+      post.status = "published";
+    }
+
+    await post.save();
+    res.json({ message: "Updated", post });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+};
+
+// DELETE /api/blog/user/:id
+export const deleteOwnPost = async (req, res) => {
+  try {
+    const { id } = req.params;
+    if (!mongoose.isValidObjectId(id)) {
+      return res.status(400).json({ message: "Invalid id" });
+    }
+
+    const ok = await BlogPost.findOneAndDelete({ _id: id, authorId: req.user.id, authorModel: "User" });
+    if (!ok) return res.status(404).json({ message: "Post not found or unauthorized" });
+
+    // Xoá ảnh cover cũ trên Cloudinary
+    if (ok.coverImagePublicId) {
+      try {
+        await cloudinary.uploader.destroy(ok.coverImagePublicId);
+      } catch (e) {}
+    }
+
+    res.json({ message: "Deleted" });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+};
+
+// GET /api/blog/user/preview/:slug
+export const previewOwnPost = async (req, res) => {
+  try {
+    const { slug } = req.params;
+    const post = await BlogPost.findOne({ slug, authorId: req.user.id, authorModel: "User" })
+      .populate("authorId", "firstName lastName fullName email avatar avatarUrl")
+      .lean();
+      
+    if (!post) return res.status(404).json({ message: "Post not found or unauthorized" });
+
+    let authorObj = { name: "Admin", avatar: "/Logo.svg" };
+    if (post.authorId && typeof post.authorId === "object") {
+      authorObj.name = `${post.authorId.firstName || ""} ${post.authorId.lastName || ""}`.trim() || post.authorId.fullName || post.authorId.email || "Admin";
+      authorObj.avatar = post.authorId.avatar || post.authorId.avatarUrl || "/Logo.svg";
+    }
+    post.author = authorObj;
+
+    const ratingResult = await BlogComment.aggregate([
+      { $match: { blogId: post._id } },
+      { $group: { _id: null, ratingAvg: { $avg: "$rating" }, ratingCount: { $sum: 1 } } }
+    ]);
+    const ratingStats = ratingResult[0] || { ratingAvg: 0, ratingCount: 0 };
+    post.ratingAvg = ratingStats.ratingAvg ? Math.round(ratingStats.ratingAvg * 10) / 10 : 0;
+    post.ratingCount = ratingStats.ratingCount;
+
+    res.json(post);
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+};
+
+// GET /api/blog/user/:id
+export const getOwnPostById = async (req, res) => {
+  try {
+    const { id } = req.params;
+    if (!mongoose.isValidObjectId(id)) {
+      return res.status(400).json({ message: "Invalid id" });
+    }
+
+    const post = await BlogPost.findOne({ _id: id, authorId: req.user.id, authorModel: "User" }).lean();
+    if (!post) return res.status(404).json({ message: "Post not found" });
+
+     res.json(post);
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+};
+
+
 /** ========== COMMENT + RATING (USER) ========== */
 
 // GET /api/blog/:slug/comments
 export const listComments = async (req, res) => {
   const { slug } = req.params;
-  const post = await BlogPost.findOne({ slug, status: "published" })
-    .select("comments ratingAvg ratingCount")
-    .lean();
+  const post = await BlogPost.findOne({ slug, status: "published" }).select("ratingAvg ratingCount").lean();
   if (!post) return res.status(404).json({ message: "Post not found" });
-  res.json(post);
+
+  const comments = await BlogComment.find({ blogId: post._id })
+    .populate("userId", "firstName lastName fullName email avatar avatarUrl")
+    .sort({ createdAt: -1 })
+    .lean();
+
+  res.json({ ...post, comments });
 };
 
 // POST /api/blog/:slug/comments
@@ -223,23 +554,21 @@ export const addComment = async (req, res) => {
     const post = await BlogPost.findOne({ slug, status: "published" });
     if (!post) return res.status(404).json({ message: "Post not found" });
 
-    const comment = {
+    const newComment = await BlogComment.create({
+      blogId: post._id,
       userId: req.user.id,
-      fullName: req.user.fullName || "",   // nếu token không có thì thôi
+      fullName: req.user.fullName || "",
       rating,
       content: content.trim()
-    };
+    });
 
-    post.comments.push(comment);
-    recalcRating(post);
-    await post.save();
+    const stats = await recalcGlobalRating(post._id);
 
-    const inserted = post.comments[post.comments.length - 1];
     res.status(201).json({
       message: "Comment added",
-      comment: inserted,
-      ratingAvg: post.ratingAvg,
-      ratingCount: post.ratingCount
+      comment: newComment,
+      ratingAvg: stats.ratingAvg,
+      ratingCount: stats.ratingCount
     });
   } catch (err) {
     res.status(500).json({ message: err.message });
@@ -255,10 +584,11 @@ export const updateComment = async (req, res) => {
     const post = await BlogPost.findOne({ slug, status: "published" });
     if (!post) return res.status(404).json({ message: "Post not found" });
 
-    const comment = post.comments.id(commentId);
-    if (!comment) return res.status(404).json({ message: "Comment not found" });
+    const comment = await BlogComment.findById(commentId);
+    if (!comment || String(comment.blogId) !== String(post._id)) {
+      return res.status(404).json({ message: "Comment not found" });
+    }
 
-    // chỉ chủ comment hoặc admin mới được sửa
     const isOwner = String(comment.userId) === String(req.user.id);
     const isAdmin = req.user.role === "admin";
     if (!isOwner && !isAdmin) {
@@ -274,16 +604,16 @@ export const updateComment = async (req, res) => {
     if (content !== undefined) {
       comment.content = content.trim();
     }
-    comment.updatedAt = new Date();
+    
+    await comment.save();
 
-    recalcRating(post);
-    await post.save();
+    const stats = await recalcGlobalRating(post._id);
 
     res.json({
       message: "Comment updated",
       comment,
-      ratingAvg: post.ratingAvg,
-      ratingCount: post.ratingCount
+      ratingAvg: stats.ratingAvg,
+      ratingCount: stats.ratingCount
     });
   } catch (err) {
     res.status(500).json({ message: err.message });
@@ -298,8 +628,10 @@ export const deleteComment = async (req, res) => {
     const post = await BlogPost.findOne({ slug, status: "published" });
     if (!post) return res.status(404).json({ message: "Post not found" });
 
-    const comment = post.comments.id(commentId);
-    if (!comment) return res.status(404).json({ message: "Comment not found" });
+    const comment = await BlogComment.findById(commentId);
+    if (!comment || String(comment.blogId) !== String(post._id)) {
+      return res.status(404).json({ message: "Comment not found" });
+    }
 
     const isOwner = String(comment.userId) === String(req.user.id);
     const isAdmin = req.user.role === "admin";
@@ -307,14 +639,13 @@ export const deleteComment = async (req, res) => {
       return res.status(403).json({ message: "Forbidden" });
     }
 
-    comment.deleteOne(); // xoá khỏi array
-    recalcRating(post);
-    await post.save();
+    await BlogComment.findByIdAndDelete(commentId);
+    const stats = await recalcGlobalRating(post._id);
 
     res.json({
       message: "Comment deleted",
-      ratingAvg: post.ratingAvg,
-      ratingCount: post.ratingCount
+      ratingAvg: stats.ratingAvg,
+      ratingCount: stats.ratingCount
     });
   } catch (err) {
     res.status(500).json({ message: err.message });

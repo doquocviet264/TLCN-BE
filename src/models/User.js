@@ -8,6 +8,9 @@ const userSchema = new mongoose.Schema({
   password: { type: String },
   phoneNumber: { type: String },
   address:  { type: String },
+  gender: { type: String, enum: ["Male", "Female", "Other"] },
+  dob: { type: Date },
+  city: { type: String },
   
   // --- HÌNH ẢNH (Đã gộp gọn lại) ---
   avatar:         { type: String, default: "" }, // Lưu URL ảnh

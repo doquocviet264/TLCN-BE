@@ -64,7 +64,9 @@ const tourSchema = new mongoose.Schema({
   finishedAt: Date,
 
   images:     { type: [String], default: [] },
-  itinerary:  { type: [daySchema], default: [] }
+  itinerary:  { type: [daySchema], default: [] },
+  includes:   { type: [String], default: [] },
+  excludes:   { type: [String], default: [] }
 }, { timestamps: true });
 
 /* ------------------- Hooks ------------------- */

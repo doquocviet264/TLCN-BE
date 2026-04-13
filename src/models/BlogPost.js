@@ -2,42 +2,28 @@
 import mongoose from "mongoose";
 
 function slugify(str = "") {
-  return str
-    .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+  // Thay thế ký tự đặc biệt tiếng Việt trước khi normalize
+  const map = {
+    đ: "d", Đ: "d",
+    ơ: "o", Ơ: "o",
+    ư: "u", Ư: "u",
+    ă: "a", Ă: "a",
+    â: "a", Â: "a",
+    ê: "e", Ê: "e",
+    ô: "o", Ô: "o",
+  };
+  const replaced = str.replace(/[đĐơƠưƯăĂâÂêÊôÔ]/g, (c) => map[c] || c);
+  return replaced
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
     .toLowerCase()
     .trim()
-    .replace(/\s+/g, "-");
+    .replace(/[^a-z0-9\s-]/g, "")
+    .replace(/\s+/g, "-")
+    .replace(/-+/g, "-");
 }
 
-const commentSchema = new mongoose.Schema({
-  userId: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: "User",
-    required: true
-  },
-  fullName: {
-    type: String,
-    default: ""
-  },
-  rating: {
-    type: Number,
-    min: 1,
-    max: 5,
-    required: true
-  },
-  content: {
-    type: String,
-    required: true,
-    trim: true
-  },
-  createdAt: {
-    type: Date,
-    default: Date.now
-  },
-  updatedAt: {
-    type: Date
-  }
-}, { _id: true }); // _id cho từng comment
+
 
 const blogSchema = new mongoose.Schema({
   title: {
@@ -62,6 +48,10 @@ const blogSchema = new mongoose.Schema({
     type: [String],
     default: []
   },
+  categories: {
+    type: [String],
+    default: []
+  },
   coverImageUrl: {
     type: String,
     default: ""
@@ -70,15 +60,41 @@ const blogSchema = new mongoose.Schema({
     type: String,
     default: ""
   },
+  authorModel: {
+    type: String,
+    enum: ["User", "Admin"],
+    default: "Admin"
+  },
   authorId: {
     type: mongoose.Schema.Types.ObjectId,
-    ref: "Admin"
+    refPath: "authorModel"
+  },
+  privacy: {
+    type: String,
+    enum: ["public", "private"],
+    default: "public"
+  },
+  locationDetail: {
+    type: String,
+    default: ""
+  },
+  province: {
+    type: String,
+    default: ""
+  },
+  ward: {
+    type: String,
+    default: ""
+  },
+  rejectReason: {
+    type: String,
+    default: ""
   },
 
   // status blog
   status: {
     type: String,
-    enum: ["draft", "published", "archived"],
+    enum: ["draft", "pending", "published", "archived", "rejected"],
     default: "draft",
     index: true
   },
@@ -96,18 +112,16 @@ const blogSchema = new mongoose.Schema({
     default: 0
   },
 
-  // danh sách comment + rating
-  comments: {
-    type: [commentSchema],
-    default: []
-  }
+
 
 }, { timestamps: true });
 
 // tạo slug tự động
 blogSchema.pre("save", function (next) {
   if (!this.slug && this.title) {
-    this.slug = slugify(this.title);
+    const base = slugify(this.title);
+    const suffix = Date.now().toString(36); // suffix ngắn tránh trùng slug
+    this.slug = `${base}-${suffix}`;
   }
   next();
 });
