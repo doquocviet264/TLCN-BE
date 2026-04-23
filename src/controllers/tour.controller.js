@@ -1,37 +1,63 @@
 import { Tour } from "../models/Tour.js";
+import { TourDeparture } from "../models/TourDeparture.js";
 import mongoose from "mongoose";
 
 export const getTours = async (req, res) => {
   const { page = 1, limit = 10, destination, title } = req.query;
   const filter = {};
-  if (destination)
-    filter.destinationSlug = new RegExp(
-      "^" +
-        destination
-          .normalize("NFD")
-          .replace(/[\u0300-\u036f]/g, "")
-          .toLowerCase()
-          .replace(/\s+/g, " ")
-          .trim()
-          .replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
-    );
-  // Lấy thời điểm bắt đầu ngày hôm nay
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
+  
+  if (destination) {
+    const dSlug = destination
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .toLowerCase()
+      .replace(/\s+/g, " ")
+      .trim();
+    filter.destinationSlug = new RegExp("^" + dSlug.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+  }
 
   const p = Math.max(parseInt(page, 10) || 1, 1);
   const l = Math.min(parseInt(limit, 10) || 10, 50);
 
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+
   const pipeline = [
     { $match: filter },
+    // Liên kết với Departures để lấy ngày khởi hành gần nhất
     {
-      $addFields: {
-        isPast: {
-          $cond: [{ $lt: ["$startDate", today] }, 1, 0]
-        }
+      $lookup: {
+        from: "tbl_tour_departures",
+        let: { tourId: "$_id" },
+        pipeline: [
+          { $match: { 
+              $expr: { $eq: ["$tourId", "$$tourId"] },
+              startDate: { $gte: today },
+              status: { $ne: "closed" }
+          } },
+          { $sort: { startDate: 1 } },
+          { $project: { _id: 1, startDate: 1, endDate: 1, current_guests: 1, max_guests: 1, priceAdult: 1 } }
+        ],
+        as: "upcomingDepartures"
       }
     },
-    { $sort: { isPast: 1, startDate: 1, _id: 1 } },
+    {
+      $addFields: {
+        // Ngày khởi hành gần nhất
+        nextDepartureDate: { $arrayElemAt: ["$upcomingDepartures.startDate", 0] },
+        // Tổng số chỗ còn lại của các tour sắp tới? (Hoặc chỉ lấy của tour gần nhất)
+        availableSeats: { $arrayElemAt: ["$upcomingDepartures.max_guests", 0] },
+        currentGuests: { $arrayElemAt: ["$upcomingDepartures.current_guests", 0] }
+      }
+    },
+    {
+      $addFields: {
+        // Sắp xếp: có lịch khởi hành lên trước, không có xuống sau
+        hasUpcoming: { $cond: [{ $gt: [{ $size: "$upcomingDepartures" }, 0] }, 1, 0] }
+      }
+    },
+    // Sắp xếp: hasUpcoming giảm dần (1 -> 0), sau đó nextDepartureDate tăng dần
+    { $sort: { hasUpcoming: -1, nextDepartureDate: 1, _id: 1 } },
     { $skip: (p - 1) * l },
     { $limit: l }
   ];
@@ -213,11 +239,11 @@ export const updateLeader = async (req, res) => {
 export const searchTours = async (req, res) => {
   try {
     const {
-      q, // keyword (tự do)
-      destination, // text người dùng gõ/chọn
-      from, // YYYY-MM-DD
-      to, // YYYY-MM-DD
-      budgetMin, // số tiền
+      q,
+      destination,
+      from,
+      to,
+      budgetMin,
       budgetMax,
       page = 1,
       limit = 10,
@@ -225,7 +251,6 @@ export const searchTours = async (req, res) => {
 
     const filter = {};
 
-    // keyword: fallback regex (nếu chưa bật text index)
     const qStr = q?.trim();
     if (qStr) {
       filter.$or = [
@@ -233,63 +258,68 @@ export const searchTours = async (req, res) => {
         { description: { $regex: new RegExp(escapeRegex(qStr), "i") } },
         { destination: { $regex: new RegExp(escapeRegex(qStr), "i") } },
       ];
-      // Nếu đã tạo text index:
-      // filter.$text = { $search: qStr };
     }
 
-    // destination: prefix match trên destinationSlug (bỏ dấu)
     const destStr = destination?.trim();
     if (destStr) {
       const destSlug = slugOf(destStr);
-      filter.destinationSlug = {
-        $regex: new RegExp("^" + escapeRegex(destSlug)),
-      };
+      filter.destinationSlug = { $regex: new RegExp("^" + escapeRegex(destSlug)) };
     }
 
-    // date range: tour nằm trong khoảng (from..to) nếu cả hai có
-    if (from || to) {
-      if (from)
-        filter.startDate = {
-          ...(filter.startDate || {}),
-          $gte: new Date(from),
-        };
-      if (to)
-        filter.endDate = { ...(filter.endDate || {}), $lte: new Date(to) };
-    }
-    // (Bỏ điều kiện "Mặc định: loại bỏ tour trong quá khứ")
-
-    // ngân sách theo priceAdult
-    const min = budgetMin !== undefined ? Number(budgetMin) : undefined;
-    const max = budgetMax !== undefined ? Number(budgetMax) : undefined;
-    if (Number.isFinite(min) || Number.isFinite(max)) {
+    // Giá: Lọc dựa trên metadata của Template (hoặc Departure nếu cần, nhưng Template cho nhanh)
+    if (budgetMin != null || budgetMax != null) {
       filter.priceAdult = {};
-      if (Number.isFinite(min)) filter.priceAdult.$gte = min;
-      if (Number.isFinite(max)) filter.priceAdult.$lte = max;
+      if (budgetMin != null) filter.priceAdult.$gte = Number(budgetMin);
+      if (budgetMax != null) filter.priceAdult.$lte = Number(budgetMax);
     }
 
     const p = Math.max(parseInt(page, 10) || 1, 1);
     const l = Math.min(parseInt(limit, 10) || 10, 50);
-
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
     const pipeline = [
       { $match: filter },
       {
-        $addFields: {
-          isPast: {
-            $cond: [{ $lt: ["$startDate", today] }, 1, 0]
-          }
+        $lookup: {
+          from: "tbl_tour_departures",
+          let: { tourId: "$_id" },
+          pipeline: [
+            { $match: { 
+                $expr: { $eq: ["$tourId", "$$tourId"] },
+                startDate: { $gte: today },
+                status: { $ne: "closed" }
+            } },
+            // Thêm filter date nếu người dùng chọn from/to
+            ...( (from || to) ? [
+                 { $match: {
+                    startDate: {
+                      ...(from ? { $gte: new Date(from) } : {}),
+                      ...(to ? { $lte: new Date(to) } : {})
+                    }
+                 } }
+            ] : []),
+            { $sort: { startDate: 1 } },
+          ],
+          as: "upcomingDepartures"
         }
       },
-      { $sort: { isPast: 1, startDate: 1, _id: 1 } },
+      // Nếu có filter from/to, chỉ lấy những tour có ít nhất 1 departure thỏa mãn
+      ...( (from || to) ? [{ $match: { "upcomingDepartures.0": { $exists: true } } }] : []),
+      {
+        $addFields: {
+          nextDepartureDate: { $arrayElemAt: ["$upcomingDepartures.startDate", 0] },
+          hasUpcoming: { $cond: [{ $gt: [{ $size: "$upcomingDepartures" }, 0] }, 1, 0] }
+        }
+      },
+      { $sort: { hasUpcoming: -1, nextDepartureDate: 1, _id: 1 } },
       { $skip: (p - 1) * l },
       { $limit: l }
     ];
 
     const [data, total] = await Promise.all([
       Tour.aggregate(pipeline),
-      Tour.countDocuments(filter),
+      Tour.countDocuments(filter), 
     ]);
 
     res.json({ total, page: p, limit: l, data });

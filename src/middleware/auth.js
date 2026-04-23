@@ -1,6 +1,6 @@
 import jwt from "jsonwebtoken";
 import mongoose from "mongoose";
-import { Tour } from "../models/Tour.js"; // Đảm bảo import Model Tour
+import { TourDeparture } from "../models/TourDeparture.js"; // kiểm tra quyền sở hữu departure
 
 // 1. Middleware bắt buộc đăng nhập
 export const auth = (req, res, next) => {
@@ -52,32 +52,34 @@ export const leaderOnly = (req, res, next) => {
   next();
 };
 
-// 5. Kiểm tra Leader có sở hữu Tour này không (Dùng trong leader.routes.js)
-export const leaderOwnsTour = async (req, res, next) => {
+// 5. Kiểm tra Leader có sở hữu Departure này không (dùng trong leader.routes.js)
+export const leaderOwnsDeparture = async (req, res, next) => {
   try {
-    const { id } = req.params; // tourId thường nằm ở params
+    const { id } = req.params; // departureId
 
     if (!mongoose.isValidObjectId(id)) {
-      // Nếu id không hợp lệ, có thể route không có param :id hoặc id sai format
-      // Cho qua (next) để controller xử lý hoặc báo lỗi tùy logic route
-      // Nhưng thường là báo lỗi luôn:
-      return res.status(400).json({ message: "Invalid tour id" });
+      return res.status(400).json({ message: "Invalid departure id" });
     }
 
-    const tour = await Tour.findById(id).select("_id leaderId");
+    const departure = await TourDeparture.findById(id).select("_id leaderId");
 
-    if (!tour) {
-      return res.status(404).json({ message: "Tour not found" });
+    if (!departure) {
+      return res.status(404).json({ message: "Departure not found" });
     }
 
-    // So sánh leaderId của tour với user id đang đăng nhập
-    if (String(tour.leaderId) !== String(req.user.id)) {
-      return res.status(403).json({ message: "Forbidden (not your tour)" });
+    if (String(departure.leaderId) !== String(req.user.id)) {
+      return res.status(403).json({ message: "Forbidden (not your departure)" });
     }
 
     next();
   } catch (error) {
-    console.error("LeaderOwnsTour Middleware Error:", error);
+    console.error("LeaderOwnsDeparture Middleware Error:", error);
     res.status(500).json({ message: "Internal Server Error" });
   }
 };
+
+/**
+ * @deprecated use leaderOwnsDeparture instead
+ * Kept for backward-compat with old routes that used Tour
+ */
+export const leaderOwnsTour = leaderOwnsDeparture;

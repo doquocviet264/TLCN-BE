@@ -12,7 +12,7 @@ const paymentRefSchema = new mongoose.Schema(
 
 const bookingSchema = new mongoose.Schema(
   {
-    tourId:      { type: mongoose.Schema.Types.ObjectId, ref: "Tour", required: true },
+    tourDepartureId: { type: mongoose.Schema.Types.ObjectId, ref: "TourDeparture", required: true },
     userId:      { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
 
     // thông tin liên hệ (lưu snapshot lúc đặt)

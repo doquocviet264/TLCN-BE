@@ -1,15 +1,13 @@
 import mongoose from "mongoose";
 import { Tour } from "../models/Tour.js";
+import { TourDeparture } from "../models/TourDeparture.js";
 import { Booking } from "../models/Booking.js";
 import { sendMail } from "../services/mailer.js";
 import { notifyTourConfirmed } from "../services/notify.js";
-// Import các template email đẹp
 import {
   getBookingCreatedTemplate,
   getPaymentReceiptTemplate,
 } from "../utils/emailTemplates.js";
-
-// ==================== CLIENT BOOKING FLOW ====================
 
 // 1. Tạo Booking Mới (Gửi mail xác nhận đặt tour)
 export const createBooking = async (req, res) => {
@@ -17,7 +15,7 @@ export const createBooking = async (req, res) => {
   try {
     await session.startTransaction();
 
-    let tourId,
+    let tourDepartureId,
       numAdults,
       numChildren,
       fullName,
@@ -29,7 +27,7 @@ export const createBooking = async (req, res) => {
     // Parse input data (hỗ trợ cả format cũ và mới)
     if (req.body.contact) {
       const { tourId: tId, contact, guests } = req.body;
-      tourId = tId;
+      tourDepartureId = tId; // FE gửi departureId vào đây
       numAdults = guests?.adults || 1;
       numChildren = guests?.children || 0;
       fullName = contact?.fullName;
@@ -39,7 +37,7 @@ export const createBooking = async (req, res) => {
       note = req.body.note;
     } else {
       const data = req.body;
-      tourId = data.tourId;
+      tourDepartureId = data.tourId; // FE gửi departureId vào đây
       numAdults = data.numAdults || 1;
       numChildren = data.numChildren || 0;
       fullName = data.fullName;
@@ -49,57 +47,53 @@ export const createBooking = async (req, res) => {
       note = data.note;
     }
 
-    if (!mongoose.isValidObjectId(tourId)) {
-      return res.status(400).json({ message: "Invalid tourId" });
+    if (!mongoose.isValidObjectId(tourDepartureId)) {
+      return res.status(400).json({ message: "Invalid tourDepartureId" });
     }
 
-    const tour = await Tour.findById(tourId).session(session);
-    if (!tour) return res.status(404).json({ message: "Tour not found" });
-    if (tour.status === "closed")
-      return res.status(400).json({ message: "Tour is closed" });
+    // Tìm lịch khởi hành (Departure)
+    const departure = await TourDeparture.findById(tourDepartureId).populate("tourId").session(session);
+    if (!departure) return res.status(404).json({ message: "Lịch khởi hành không tồn tại" });
+    
+    if (departure.status === "closed")
+      return res.status(400).json({ message: "Lịch khởi hành này đã đóng" });
+
+    const tour = departure.tourId;
+    if (!tour) return res.status(404).json({ message: "Dữ liệu tour không tìm thấy" });
 
     // Validate số lượng khách
-    const guestsRequested =
-      (Number(numAdults) || 0) + (Number(numChildren) || 0);
+    const guestsRequested = (Number(numAdults) || 0) + (Number(numChildren) || 0);
     if (guestsRequested <= 0)
-      return res.status(400).json({ message: "Invalid guests" });
+      return res.status(400).json({ message: "Số lượng khách không hợp lệ" });
 
-    // Check slot còn trống
-    if (Number.isFinite(tour.quantity)) {
-      const after = (tour.current_guests || 0) + guestsRequested;
-      if (after > tour.quantity) {
+    // Check slot còn trống dựa trên Departure
+    if (Number.isFinite(departure.max_guests)) {
+      const after = (departure.current_guests || 0) + guestsRequested;
+      if (after > departure.max_guests) {
         return res.status(400).json({
-          message: "Not enough slots",
-          available: Math.max(
-            0,
-            (tour.quantity || 0) - (tour.current_guests || 0)
-          ),
+          message: "Lịch khởi hành này đã hết chỗ",
+          available: Math.max(0, (departure.max_guests || 0) - (departure.current_guests || 0)),
         });
       }
     }
 
-    // Tính toán giá tiền
-    const priceAdult = tour.priceAdult ?? 0;
-    const priceChild = tour.priceChild ?? Math.round(priceAdult * 0.6);
-    const totalPrice =
-      Number(numAdults) * priceAdult + Number(numChildren) * priceChild;
+    // Tính toán giá tiền (Ưu tiên giá override ở Departure)
+    const priceAdult = departure.priceAdult ?? tour.priceAdult ?? 0;
+    const priceChild = departure.priceChild ?? tour.priceChild ?? Math.round(priceAdult * 0.6);
+    const totalPrice = Number(numAdults) * priceAdult + Number(numChildren) * priceChild;
 
-    const alreadyConfirmed =
-      tour.status === "confirmed" ||
-      tour.current_guests >= (tour.min_guests || 0);
-    const depositRate = alreadyConfirmed
-      ? 1
-      : Number(process.env.BOOKING_DEPOSIT_RATE ?? 0.2);
+    const alreadyConfirmed = departure.status === "confirmed" || (departure.current_guests + guestsRequested) >= (departure.min_guests || 0);
+    const depositRate = alreadyConfirmed ? 1 : Number(process.env.BOOKING_DEPOSIT_RATE ?? 0.2);
     const depositAmount = Math.round(totalPrice * depositRate);
 
     const code = "BK" + Math.random().toString(36).slice(2, 8).toUpperCase();
 
-    // Tạo booking
+    // Tạo booking liên kết với tourDepartureId
     const [booking] = await Booking.create(
       [
         {
           code,
-          tourId,
+          tourDepartureId,
           userId: req.user.id,
           fullName,
           email,
@@ -122,9 +116,9 @@ export const createBooking = async (req, res) => {
       { session }
     );
 
-    // Giảm số chỗ ngồi ngay khi tạo booking (reserve seats)
-    await Tour.updateOne(
-      { _id: tourId },
+    // Cập nhật số khách vào Departure
+    await TourDeparture.updateOne(
+      { _id: tourDepartureId },
       { $inc: { current_guests: guestsRequested } },
       { session }
     );
@@ -132,7 +126,7 @@ export const createBooking = async (req, res) => {
     await session.commitTransaction();
     session.endSession();
 
-    // --- GỬI EMAIL XÁC NHẬN ĐẶT TOUR ---
+    // --- GỬI EMAIL XÁC NHẬN ---
     if (booking.email) {
       sendMail({
         to: booking.email,
@@ -152,10 +146,10 @@ export const createBooking = async (req, res) => {
   } catch (err) {
     try {
       if (session.inTransaction()) await session.abortTransaction();
-    } catch {}
+    } catch { }
     try {
       session.endSession();
-    } catch {}
+    } catch { }
     return res.status(500).json({ message: err.message });
   }
 };
@@ -206,21 +200,24 @@ export const onPaymentReceived = async (req, res) => {
     }
     // -------------------------------------
 
-    // Auto confirm tour nếu đủ khách (slot đã được reserve lúc tạo booking)
+    // Auto confirm tour nếu đủ khách
     if (isFirstDeposit) {
-      const tour = await Tour.findById(booking.tourId);
+      const departure = await TourDeparture.findById(booking.tourDepartureId);
 
-      // Auto confirm tour nếu đủ khách
+      // Auto confirm departure nếu đủ khách
       if (
-        tour &&
-        (tour.current_guests || 0) >= (tour.min_guests || 0) &&
-        tour.status !== "confirmed"
+        departure &&
+        (departure.current_guests || 0) >= (departure.min_guests || 0) &&
+        departure.status !== "confirmed" &&
+        departure.status !== "in_progress" &&
+        departure.status !== "completed"
       ) {
-        tour.status = "confirmed";
-        await tour.save();
+        departure.status = "confirmed";
+        await departure.save();
 
-        // Gửi mail thông báo tour khởi hành cho TẤT CẢ khách
-        await notifyTourConfirmed(tour._id);
+        // Gửi mail thông báo tour khởi hành cho TẤT CẢ khách của lịch này
+        // (Cần cập nhật notifyTourConfirmed hỗ trợ tourDepartureId nếu cần, hoặc dùng tourId gốc)
+        await notifyTourConfirmed(departure.tourId).catch(console.error);
       }
     }
 
@@ -235,18 +232,39 @@ export const myBookings = async (req, res) => {
   const page = Math.max(parseInt(req.query.page || "1", 10), 1);
   const limit = Math.min(parseInt(req.query.limit || "10", 10), 50);
 
-  const [rows, total] = await Promise.all([
+  let [rows, total] = await Promise.all([
     Booking.find({ userId: req.user.id })
-      .populate(
-        "tourId",
-        "title destination startDate endDate cover images time priceAdult priceChild"
-      )
+      .populate({
+        path: "tourDepartureId",
+        populate: {
+          path: "tourId",
+          select: "title destination startDate endDate cover images time priceAdult priceChild"
+        }
+      })
       .sort({ createdAt: -1 })
       .skip((page - 1) * limit)
       .limit(limit)
       .lean(),
     Booking.countDocuments({ userId: req.user.id }),
   ]);
+
+  rows = rows.map((b) => {
+    if (b.tourDepartureId) {
+      b.tourId = {
+        _id: b.tourDepartureId._id,
+        title: b.tourDepartureId.tourId?.title,
+        destination: b.tourDepartureId.tourId?.destination,
+        startDate: b.tourDepartureId.startDate,
+        endDate: b.tourDepartureId.endDate,
+        cover: b.tourDepartureId.tourId?.cover,
+        images: b.tourDepartureId.tourId?.images,
+        time: b.tourDepartureId.tourId?.time,
+        priceAdult: b.tourDepartureId.priceAdult || b.tourDepartureId.tourId?.priceAdult,
+        priceChild: b.tourDepartureId.priceChild || b.tourDepartureId.tourId?.priceChild,
+      };
+    }
+    return b;
+  });
 
   res.json({ total, page, limit, data: rows });
 };
@@ -266,11 +284,11 @@ export const cancelBookingByUser = async (req, res) => {
   bk.bookingStatus = "x";
   await bk.save();
 
-  // Trả lại slot khi hủy booking
+  // Trả lại slot khi hủy booking ở Departure
   const guestsToRelease = (bk.numAdults || 0) + (bk.numChildren || 0);
-  if (guestsToRelease > 0) {
-    await Tour.updateOne(
-      { _id: bk.tourId },
+  if (guestsToRelease > 0 && bk.tourDepartureId) {
+    await TourDeparture.updateOne(
+      { _id: bk.tourDepartureId },
       { $inc: { current_guests: -guestsToRelease } }
     );
   }
@@ -285,29 +303,39 @@ export const getMyBookingDetail = async (req, res) => {
   try {
     const { code } = req.params;
     const booking = await Booking.findOne({ code, userId: req.user.id })
-      .populate(
-        "tourId",
-        "title destination startDate endDate images time priceAdult priceChild status itinerary"
-      )
+      .populate({
+        path: "tourDepartureId",
+        populate: {
+          path: "tourId",
+          select: "title destination startDate endDate images time priceAdult priceChild status itinerary"
+        }
+      })
       .lean();
 
     if (!booking) return res.status(404).json({ message: "Booking not found" });
 
+    let mappedTour = null;
+    if (booking.tourDepartureId) {
+      mappedTour = {
+        id: booking.tourDepartureId._id,
+        title: booking.tourDepartureId.tourId?.title,
+        destination: booking.tourDepartureId.tourId?.destination,
+        startDate: booking.tourDepartureId.startDate,
+        endDate: booking.tourDepartureId.endDate,
+        time: booking.tourDepartureId.tourId?.time,
+        status: booking.tourDepartureId.tourId?.status,
+        images: booking.tourDepartureId.tourId?.images || [],
+        itinerary: booking.tourDepartureId.tourId?.itinerary || [],
+        priceAdult: booking.tourDepartureId.priceAdult || booking.tourDepartureId.tourId?.priceAdult,
+        priceChild: booking.tourDepartureId.priceChild || booking.tourDepartureId.tourId?.priceChild
+      };
+      
+      booking.tourId = mappedTour;
+    }
+
     res.json({
       ...booking,
-      tour: booking.tourId
-        ? {
-            id: booking.tourId._id,
-            title: booking.tourId.title,
-            destination: booking.tourId.destination,
-            startDate: booking.tourId.startDate,
-            endDate: booking.tourId.endDate,
-            time: booking.tourId.time,
-            status: booking.tourId.status,
-            images: booking.tourId.images || [],
-            itinerary: booking.tourId.itinerary || [],
-          }
-        : null,
+      tour: mappedTour,
     });
   } catch (err) {
     res.status(500).json({ message: err.message });
@@ -327,16 +355,36 @@ export const getAdminBookings = async (req, res) => {
     if (req.query.status && req.query.status.trim())
       filter.bookingStatus = req.query.status;
     if (req.query.tourId && mongoose.isValidObjectId(req.query.tourId))
-      filter.tourId = req.query.tourId;
+      filter.tourDepartureId = req.query.tourId;
 
     const total = await Booking.countDocuments(filter);
-    const bookings = await Booking.find(filter)
-      .populate("tourId", "title destination startDate endDate")
+    let bookings = await Booking.find(filter)
+      .populate({
+        path: "tourDepartureId",
+        populate: {
+          path: "tourId",
+          select: "title destination",
+        },
+      })
       .populate("userId", "fullName username email avatarUrl")
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(limit)
       .lean();
+
+    // Mapping lại dữ liệu để FE nhận được như cũ
+    bookings = bookings.map((b) => {
+      if (b.tourDepartureId) {
+        b.tourId = {
+          _id: b.tourDepartureId._id,
+          title: b.tourDepartureId.tourId?.title,
+          destination: b.tourDepartureId.tourId?.destination,
+          startDate: b.tourDepartureId.startDate,
+          endDate: b.tourDepartureId.endDate,
+        };
+      }
+      return b;
+    });
 
     // Search thủ công (nếu cần filter phức tạp hơn)
     let filteredBookings = bookings;
@@ -361,9 +409,32 @@ export const getAdminBookings = async (req, res) => {
 export const getAdminBookingById = async (req, res) => {
   try {
     const booking = await Booking.findById(req.params.id)
-      .populate("tourId")
-      .populate("userId", "fullName email");
+      .populate({
+        path: "tourDepartureId",
+        populate: {
+          path: "tourId",
+          select: "title destination startDate endDate images itinerary time status"
+        }
+      })
+      .populate("userId", "fullName email")
+      .lean();
+      
     if (!booking) return res.status(404).json({ message: "Not found" });
+    
+    if (booking.tourDepartureId) {
+      booking.tourId = {
+        _id: booking.tourDepartureId._id,
+        title: booking.tourDepartureId.tourId?.title,
+        destination: booking.tourDepartureId.tourId?.destination,
+        startDate: booking.tourDepartureId.startDate,
+        endDate: booking.tourDepartureId.endDate,
+        images: booking.tourDepartureId.tourId?.images,
+        itinerary: booking.tourDepartureId.tourId?.itinerary,
+        time: booking.tourDepartureId.tourId?.time,
+        status: booking.tourDepartureId.tourId?.status,
+      };
+    }
+    
     res.json(booking);
   } catch (err) {
     res.status(500).json({ message: err.message });
@@ -379,14 +450,28 @@ export const updateAdminBookingStatus = async (req, res) => {
       { bookingStatus: status },
       { new: true }
     )
-      .populate("tourId")
-      .populate("userId");
+      .populate({
+        path: "tourDepartureId",
+        populate: { path: "tourId" }
+      })
+      .populate("userId")
+      .lean();
 
     if (!booking) return res.status(404).json({ message: "Not found" });
 
     // Nếu Admin xác nhận Tour (status -> 'c'), gửi mail thông báo
-    if (status === "c") {
-      notifyTourConfirmed(booking.tourId._id).catch(console.error);
+    if (status === "c" && booking.tourDepartureId && booking.tourDepartureId.tourId) {
+      notifyTourConfirmed(booking.tourDepartureId.tourId._id).catch(console.error);
+    }
+
+    if (booking.tourDepartureId) {
+      booking.tourId = {
+        _id: booking.tourDepartureId._id,
+        title: booking.tourDepartureId.tourId?.title,
+        destination: booking.tourDepartureId.tourId?.destination,
+        startDate: booking.tourDepartureId.startDate,
+        endDate: booking.tourDepartureId.endDate
+      };
     }
 
     res.json(booking);
@@ -610,14 +695,30 @@ export const getAdminBookingByCode = async (req, res) => {
     const { code } = req.params;
 
     const booking = await Booking.findOne({ code })
-      .populate(
-        "tourId",
-        "title destination startDate endDate priceAdult priceChild"
-      )
-      .populate("userId", "fullName username email avatarUrl");
+      .populate({
+        path: "tourDepartureId",
+        populate: {
+          path: "tourId",
+          select: "title destination startDate endDate priceAdult priceChild"
+        }
+      })
+      .populate("userId", "fullName username email avatarUrl")
+      .lean();
 
     if (!booking) {
       return res.status(404).json({ message: "Booking not found" });
+    }
+
+    if (booking.tourDepartureId) {
+      booking.tourId = {
+        _id: booking.tourDepartureId._id,
+        title: booking.tourDepartureId.tourId?.title,
+        destination: booking.tourDepartureId.tourId?.destination,
+        startDate: booking.tourDepartureId.startDate,
+        endDate: booking.tourDepartureId.endDate,
+        priceAdult: booking.tourDepartureId.priceAdult || booking.tourDepartureId.tourId?.priceAdult,
+        priceChild: booking.tourDepartureId.priceChild || booking.tourDepartureId.tourId?.priceChild
+      };
     }
 
     res.json(booking);

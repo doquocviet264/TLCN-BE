@@ -1,15 +1,22 @@
 import { Router } from "express";
-import { auth, leaderOnly, leaderOwnsTour } from "../middleware/auth.js";
-import { leaderMyTours, leaderAddTimeline, leaderCreateExpense } from "../controllers/leader.controller.js";
+import { auth, leaderOnly, leaderOwnsDeparture } from "../middleware/auth.js";
+import {
+  leaderMyTours,
+  leaderGetDeparture,
+  leaderGetPassengers,
+  leaderAddTimeline,
+  leaderCreateExpense,
+  leaderGetExpenses,
+} from "../controllers/leader.controller.js";
 
 const router = Router();
 
 /**
  * @openapi
- * /api/leader/tours:
+ * /api/leader/departures:
  *   get:
  *     tags: [Leader]
- *     summary: Danh sách tour được phân công cho leader
+ *     summary: Danh sách Departure được phân công cho leader
  *     security: [ { bearerAuth: [] } ]
  *     parameters:
  *       - in: query
@@ -21,20 +28,56 @@ const router = Router();
  *     responses:
  *       200: { description: OK }
  */
-router.get("/tours", auth, leaderOnly, leaderMyTours);
+router.get("/departures", auth, leaderOnly, leaderMyTours);
 
 /**
  * @openapi
- * /api/leader/tours/{id}/timeline:
- *   post:
+ * /api/leader/departures/{id}:
+ *   get:
  *     tags: [Leader]
- *     summary: Leader thêm sự kiện timeline cho tour (chỉ tour được phân công)
+ *     summary: Chi tiết 1 Departure (chỉ departure được phân công)
  *     security: [ { bearerAuth: [] } ]
  *     parameters:
  *       - in: path
  *         name: id
  *         required: true
- *         schema: { type: string, example: "68f30a0c9a9e2d9f3f8b5c10" }
+ *         schema: { type: string }
+ *     responses:
+ *       200: { description: OK }
+ *       404: { description: Departure not found or not assigned to you }
+ */
+router.get("/departures/:id", auth, leaderOnly, leaderGetDeparture);
+
+/**
+ * @openapi
+ * /api/leader/departures/{id}/passengers:
+ *   get:
+ *     tags: [Leader]
+ *     summary: Danh sách hành khách đặt vé cho departure này
+ *     security: [ { bearerAuth: [] } ]
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string }
+ *     responses:
+ *       200: { description: OK }
+ *       403: { description: Forbidden }
+ */
+router.get("/departures/:id/passengers", auth, leaderOnly, leaderGetPassengers);
+
+/**
+ * @openapi
+ * /api/leader/departures/{id}/timeline:
+ *   patch:
+ *     tags: [Leader]
+ *     summary: Leader thêm sự kiện timeline cho departure (chỉ departure được phân công)
+ *     security: [ { bearerAuth: [] } ]
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string }
  *     requestBody:
  *       required: true
  *       content:
@@ -49,22 +92,19 @@ router.get("/tours", auth, leaderOnly, leaderMyTours);
  *               at:
  *                 type: string
  *                 format: date-time
- *                 example: "2025-12-01T07:30:00.000Z"
  *               place:
  *                 type: string
- *                 example: "Hà Nội"
  *               note:
  *                 type: string
- *                 example: "Xuất phát đúng giờ"
  *     responses:
  *       200: { description: Timeline updated }
- *       404: { description: Tour not found or not assigned to you }
+ *       404: { description: Departure not found or not assigned to you }
  */
-router.post("/tours/:id/timeline", auth, leaderOnly, leaderOwnsTour, leaderAddTimeline);
+router.patch("/departures/:id/timeline", auth, leaderOnly, leaderOwnsDeparture, leaderAddTimeline);
 
 /**
  * @openapi
- * /api/leader/tours/{id}/expenses:
+ * /api/leader/departures/{id}/expenses:
  *   post:
  *     tags: [Leader]
  *     summary: Leader thêm chi phí phát sinh (occurredAt = thời gian server)
@@ -84,20 +124,35 @@ router.post("/tours/:id/timeline", auth, leaderOnly, leaderOwnsTour, leaderAddTi
  *             properties:
  *               title:
  *                 type: string
- *                 example: "Ăn trưa đoàn"
  *               amount:
  *                 type: number
- *                 example: 1200000
  *               note:
  *                 type: string
- *                 example: "Nhà hàng A"
  *               visibleToCustomers:
  *                 type: boolean
- *                 example: true
  *     responses:
  *       201: { description: Expense created }
- *       404: { description: Tour not found or not assigned to you }
+ *       404: { description: Departure not found or not assigned to you }
+ *   get:
+ *     tags: [Leader]
+ *     summary: Danh sách chi phí của departure
+ *     security: [ { bearerAuth: [] } ]
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string }
+ *     responses:
+ *       200: { description: OK }
  */
-router.post("/tours/:id/expenses", auth, leaderOnly, leaderOwnsTour, leaderCreateExpense);
+router.post("/departures/:id/expenses", auth, leaderOnly, leaderOwnsDeparture, leaderCreateExpense);
+router.get("/departures/:id/expenses",  auth, leaderOnly, leaderGetExpenses);
+
+// ── Backward-compat: /tours → redirect sang /departures ──────────────
+// Giữ để không break các client cũ đang call /leader/tours
+router.get("/tours",              auth, leaderOnly, leaderMyTours);
+router.get("/tours/:id",          auth, leaderOnly, leaderGetDeparture);
+router.post("/tours/:id/timeline", auth, leaderOnly, leaderOwnsDeparture, leaderAddTimeline);
+router.post("/tours/:id/expenses", auth, leaderOnly, leaderOwnsDeparture, leaderCreateExpense);
 
 export default router;

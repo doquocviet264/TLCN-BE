@@ -6,11 +6,13 @@ import mongoose from "mongoose";
 import { Admin } from "../models/Admin.js";
 import { Leader } from "../models/Leader.js";      // ⬅️ dùng khi gán leaderId
 import { Tour } from "../models/Tour.js";
+import { TourDeparture } from "../models/TourDeparture.js";
 import { Expense } from "../models/Expense.js";
 import { User } from "../models/User.js";
 import { Booking } from "../models/Booking.js";
 import { Review } from "../models/Review.js";
 import { BlogPost } from "../models/BlogPost.js";
+import cloudinary from "../config/cloudinary.js";
 
 /* ===========================
  *  AUTH: ADMIN LOGIN (JWT)
@@ -90,8 +92,8 @@ export const getDashboardStats = async (req, res) => {
       Review.countDocuments(),
       BlogPost.countDocuments(),
       
-      // Active tours
-      Tour.countDocuments({ status: { $in: ['confirmed', 'in_progress'] } }),
+      // Active departures (confirmed + in_progress)
+      TourDeparture.countDocuments({ status: { $in: ['confirmed', 'in_progress'] } }),
       
       // Monthly bookings
       Booking.countDocuments({ 
@@ -118,7 +120,7 @@ export const getDashboardStats = async (req, res) => {
       // Recent bookings
       Booking.find({ bookingStatus: { $ne: 'x' } })
         .populate('userId', 'fullName email')
-        .populate('tourId', 'title destination')
+        .populate('tourDepartureId', 'startDate endDate status')
         .sort({ createdAt: -1 })
         .limit(5)
         .lean(),
@@ -128,7 +130,7 @@ export const getDashboardStats = async (req, res) => {
         { $match: { bookingStatus: { $ne: 'x' } } },
         { 
           $group: { 
-            _id: '$tourId', 
+            _id: '$tourDepartureId', 
             bookingCount: { $sum: 1 },
             totalGuests: { $sum: { $add: ['$numAdults', '$numChildren'] } }
           }
@@ -137,13 +139,22 @@ export const getDashboardStats = async (req, res) => {
         { $limit: 5 },
         {
           $lookup: {
-            from: 'tbl_tours',
+            from: 'tbl_tour_departures',
             localField: '_id',
+            foreignField: '_id',
+            as: 'departure'
+          }
+        },
+        { $unwind: '$departure' },
+        {
+          $lookup: {
+            from: 'tbl_tours',
+            localField: 'departure.tourId',
             foreignField: '_id',
             as: 'tour'
           }
         },
-        { $unwind: '$tour' }
+        { $unwind: { path: '$tour', preserveNullAndEmptyArrays: true } }
       ]),
       
       // Average rating
@@ -187,8 +198,8 @@ export const getDashboardStats = async (req, res) => {
       })),
       popularTours: popularTours.map(item => ({
         _id: item._id,
-        title: item.tour.title,
-        destination: item.tour.destination,
+        title: item.tour?.title,
+        destination: item.tour?.destination,
         bookingCount: item.bookingCount,
         totalGuests: item.totalGuests
       })),
@@ -201,8 +212,8 @@ export const getDashboardStats = async (req, res) => {
       }
     };
 
-    // Get tour status distribution
-    const statusCounts = await Tour.aggregate([
+    // Get departure status distribution (status now lives on TourDeparture)
+    const statusCounts = await TourDeparture.aggregate([
       { $group: { _id: '$status', count: { $sum: 1 } } }
     ]);
 
@@ -232,8 +243,11 @@ export const listOngoingTours = async (req, res) => {
       filter.endDate   = { $gte: now };
     }
 
-    const data = await Tour.find(filter)
-      .select("title destination startDate endDate status leader leaderId current_guests min_guests max_guests departedAt arrivedAt finishedAt")
+    // Status now lives on TourDeparture
+    const data = await TourDeparture.find(filter)
+      .populate("tourId",   "title destination")
+      .populate("leaderId", "fullName phoneNumber")
+      .select("tourId startDate endDate status leaderId current_guests min_guests departedAt arrivedAt finishedAt")
       .sort({ startDate: 1 })
       .lean();
 
@@ -248,53 +262,46 @@ export const listOngoingTours = async (req, res) => {
  *  - Cho phép gán leaderId (tham chiếu Leader)
  *  - Đồng thời snapshot leader(fullName, phoneNumber, note)
  * ==================================== */
+/**
+ * @deprecated Use departure.controller.js assignLeaderToDeparture instead.
+ * Kept for backward compat – now tries to update TourDeparture if departureId provided,
+ * fallback to old Tour update behaviour.
+ */
 export const updateLeader = async (req, res) => {
   try {
-    const { id } = req.params;                   // tourId
+    const { id } = req.params;                   // departureId or tourId
     const { leaderId, fullName, phoneNumber, note } = req.body || {};
 
     if (!mongoose.isValidObjectId(id)) {
-      return res.status(400).json({ message: "Invalid tourId" });
+      return res.status(400).json({ message: "Invalid ID" });
     }
 
     const update = {};
 
-    // Nếu truyền leaderId -> tìm Leader và gán
     if (leaderId) {
       if (!mongoose.isValidObjectId(leaderId)) {
         return res.status(400).json({ message: "Invalid leaderId" });
       }
       const leader = await Leader.findById(leaderId);
       if (!leader) return res.status(404).json({ message: "Leader not found" });
-
       update.leaderId = leader._id;
-      // snapshot thông tin hiện tại vào embed leader
-      update.leader = {
-        fullName: leader.fullName,
-        phoneNumber: leader.phoneNumber || "",
-        note: note || ""
-      };
-    }
-
-    // Nếu muốn cập nhật nhanh embed leader (không đổi leaderId)
-    if (!leaderId && (fullName || phoneNumber || note !== undefined)) {
-      if (!fullName || !phoneNumber) {
-        return res.status(400).json({ message: "fullName & phoneNumber are required when updating leader snapshot" });
-      }
-      update.leader = { fullName, phoneNumber, note: note || "" };
     }
 
     if (!Object.keys(update).length) {
       return res.status(400).json({ message: "No changes" });
     }
 
-    const tour = await Tour.findByIdAndUpdate(
+    // Thử update TourDeparture trước
+    const departure = await TourDeparture.findByIdAndUpdate(
       id,
       { $set: update },
       { new: true }
     );
-    if (!tour) return res.status(404).json({ message: "Tour not found" });
+    if (departure) return res.json({ message: "Leader updated", departure });
 
+    // Fallback: cũ (nếu id là tourId)
+    const tour = await Tour.findByIdAndUpdate(id, { $set: update }, { new: true });
+    if (!tour) return res.status(404).json({ message: "Not found" });
     res.json({ message: "Leader updated", tour });
   } catch (err) {
     res.status(500).json({ message: err.message });
@@ -308,11 +315,11 @@ export const updateLeader = async (req, res) => {
  * ==================================== */
 export const addTimelineEvent = async (req, res) => {
   try {
-    const { id } = req.params;                   // tourId
+    const { id } = req.params;                   // departureId
     const { eventType, at, place, note } = req.body || {};
 
     if (!mongoose.isValidObjectId(id)) {
-      return res.status(400).json({ message: "Invalid tourId" });
+      return res.status(400).json({ message: "Invalid departure ID" });
     }
 
     const ALLOWED = ["departed", "arrived", "checkpoint", "note", "finished"];
@@ -349,10 +356,11 @@ export const addTimelineEvent = async (req, res) => {
       update.$set = { ...(update.$set || {}), finishedAt: atDate, status: "completed" };
     }
 
-    const tour = await Tour.findByIdAndUpdate(id, update, { new: true });
-    if (!tour) return res.status(404).json({ message: "Tour not found" });
+    // Update TourDeparture (status/timeline đã chuyển sang đây)
+    const departure = await TourDeparture.findByIdAndUpdate(id, update, { new: true });
+    if (!departure) return res.status(404).json({ message: "Departure not found" });
 
-    res.json({ message: "Timeline updated", tour });
+    res.json({ message: "Timeline updated", departure });
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
@@ -366,11 +374,11 @@ export const addTimelineEvent = async (req, res) => {
  * ==================================== */
 export const createExpense = async (req, res) => {
   try {
-    const { id } = req.params; // tourId
+    const { id } = req.params; // departureId
     const { title, amount, note, visibleToCustomers = true } = req.body || {};
 
     if (!mongoose.isValidObjectId(id)) {
-      return res.status(400).json({ message: "Invalid tourId" });
+      return res.status(400).json({ message: "Invalid departure ID" });
     }
     if (!title || !Number.isFinite(Number(amount))) {
       return res.status(400).json({ message: "title & amount are required" });
@@ -380,10 +388,10 @@ export const createExpense = async (req, res) => {
     }
 
     const expense = await Expense.create({
-      tourId: new mongoose.Types.ObjectId(id),
+      tourDepartureId: new mongoose.Types.ObjectId(id),
       title,
       amount: Number(amount),
-      occurredAt: new Date(),                        // ⏱ server time
+      occurredAt: new Date(),
       note: note || "",
       visibleToCustomers: Boolean(visibleToCustomers),
       addedBy: new mongoose.Types.ObjectId(req.user.id)
@@ -397,11 +405,11 @@ export const createExpense = async (req, res) => {
 
 export const listExpensesAdmin = async (req, res) => {
   try {
-    const { id } = req.params; // tourId
+    const { id } = req.params; // departureId
     if (!mongoose.isValidObjectId(id)) {
-      return res.status(400).json({ message: "Invalid tourId" });
+      return res.status(400).json({ message: "Invalid departure ID" });
     }
-    const items = await Expense.find({ tourId: id })
+    const items = await Expense.find({ tourDepartureId: id })
       .sort({ occurredAt: 1, _id: 1 })
       .lean();
 
@@ -454,10 +462,10 @@ export const deleteExpense = async (req, res) => {
 // GET all tours (with filters)
 export const getAllTours = async (req, res) => {
   try {
-    const { page = 1, limit = 20, status, destination, search } = req.query;
+    const { page = 1, limit = 20, destination, search } = req.query;
+    // Lưu ý: status không còn ở Tour template, bỏ filter status
     
     const filter = {};
-    if (status) filter.status = status;
     if (destination) filter.destinationSlug = new RegExp(destination
       .normalize("NFD").replace(/[\u0300-\u036f]/g,"")
       .toLowerCase().replace(/\s+/g," ").trim(), "i");
@@ -474,7 +482,7 @@ export const getAllTours = async (req, res) => {
 
     const [data, total] = await Promise.all([
       Tour.find(filter)
-        .sort({ startDate: -1, createdAt: -1 })
+        .sort({ createdAt: -1 })
         .skip((p - 1) * l)
         .limit(l)
         .lean(),
@@ -507,7 +515,63 @@ export const getTourByIdAdmin = async (req, res) => {
 // CREATE new tour
 export const createTourAdmin = async (req, res) => {
   try {
-    const tourData = req.body;
+    let tourData = req.body;
+
+    // Handle multipart/form-data (when files are present)
+    if (req.body.data) {
+      try {
+        tourData = JSON.parse(req.body.data);
+      } catch (e) {
+        return res.status(400).json({ message: "Invalid JSON in data field" });
+      }
+    }
+
+    // Handle uploaded files
+    if (req.files && req.files.length > 0) {
+      const folder = process.env.CLOUDINARY_FOLDER || "travela/tours";
+      
+      for (const file of req.files) {
+        const uploadResult = await new Promise((resolve, reject) => {
+          const stream = cloudinary.uploader.upload_stream(
+            { folder, resource_type: "image", overwrite: true },
+            (err, result) => (err ? reject(err) : resolve(result))
+          );
+          stream.end(file.buffer);
+        });
+
+        const url = uploadResult.secure_url;
+        const fieldName = file.fieldname;
+
+        // Pattern matching for keys: 
+        // 1. main_image_index
+        // 2. item_image_dayIdx_segIdx_itemIdx
+        
+        if (fieldName.startsWith("main_image_")) {
+          const idx = parseInt(fieldName.split("_")[2]);
+          if (!Array.isArray(tourData.images)) tourData.images = [];
+          tourData.images[idx] = url;
+        } else if (fieldName.startsWith("item_image_")) {
+           const parts = fieldName.split("_"); // ["item", "image", dayIdx, segIdx, itemIdx]
+           const d = parseInt(parts[2]);
+           const s = parseInt(parts[3]);
+           const i = parseInt(parts[4]);
+           
+           if (tourData.itinerary?.[d]?.segments?.[s]?.items?.[i]) {
+             const item = tourData.itinerary[d].segments[s].items[i];
+             if (typeof item === 'string') {
+               tourData.itinerary[d].segments[s].items[i] = { text: item, imageUrl: url };
+             } else {
+               tourData.itinerary[d].segments[s].items[i].imageUrl = url;
+             }
+           }
+        }
+      }
+    }
+
+    // Filter main images (remove empty/null)
+    if (Array.isArray(tourData.images)) {
+      tourData.images = tourData.images.filter(img => !!img);
+    }
 
     // Validate required fields
     if (!tourData.title || !tourData.destination) {
@@ -547,7 +611,59 @@ export const updateTourAdmin = async (req, res) => {
       return res.status(400).json({ message: "Invalid tour ID" });
     }
 
-    const updateData = { ...req.body };
+    let updateData = req.body;
+
+    // Handle multipart/form-data (when files are present)
+    if (req.body.data) {
+      try {
+        updateData = JSON.parse(req.body.data);
+      } catch (e) {
+        return res.status(400).json({ message: "Invalid JSON in data field" });
+      }
+    }
+
+    // Handle uploaded files
+    if (req.files && req.files.length > 0) {
+      const folder = process.env.CLOUDINARY_FOLDER || "travela/tours";
+      
+      for (const file of req.files) {
+        const uploadResult = await new Promise((resolve, reject) => {
+          const stream = cloudinary.uploader.upload_stream(
+            { folder, resource_type: "image", overwrite: true },
+            (err, result) => (err ? reject(err) : resolve(result))
+          );
+          stream.end(file.buffer);
+        });
+
+        const url = uploadResult.secure_url;
+        const fieldName = file.fieldname;
+
+        if (fieldName.startsWith("main_image_")) {
+          const idx = parseInt(fieldName.split("_")[2]);
+          if (!Array.isArray(updateData.images)) updateData.images = [];
+          updateData.images[idx] = url;
+        } else if (fieldName.startsWith("item_image_")) {
+           const parts = fieldName.split("_");
+           const d = parseInt(parts[2]);
+           const s = parseInt(parts[3]);
+           const i = parseInt(parts[4]);
+           
+           if (updateData.itinerary?.[d]?.segments?.[s]?.items?.[i]) {
+             const item = updateData.itinerary[d].segments[s].items[i];
+             if (typeof item === 'string') {
+               updateData.itinerary[d].segments[s].items[i] = { text: item, imageUrl: url };
+             } else {
+               updateData.itinerary[d].segments[s].items[i].imageUrl = url;
+             }
+           }
+        }
+      }
+    }
+
+    // Filter main images (remove empty/null)
+    if (Array.isArray(updateData.images)) {
+      updateData.images = updateData.images.filter(img => !!img);
+    }
 
     // Handle images - ensure minimum 5 images
     if (Array.isArray(updateData.images) && updateData.images.length < 5) {
@@ -816,3 +932,4 @@ export const deleteAdminLeader = async (req, res) => {
     res.status(500).json({ message: err.message });
   }
 };
+

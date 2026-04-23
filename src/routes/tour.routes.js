@@ -8,14 +8,10 @@ import {
   searchTours,
   suggestDestinations
 } from "../controllers/tour.controller.js";
-import {
-  getAllTours,
-  getTourByIdAdmin,
-  createTourAdmin,
-  updateTourAdmin,
-  deleteTourAdmin
-} from "../controllers/admin.controller.js";
+import { listDepartures, getDepartureById } from "../controllers/departure.controller.js";
+import { getAllTours, getTourByIdAdmin, createTourAdmin, updateTourAdmin, deleteTourAdmin } from "../controllers/admin.controller.js";
 import { auth, adminOnly } from "../middleware/auth.js";
+import { uploadBlogMem } from "../middleware/upload.js";
 
 const router = Router();
 
@@ -118,6 +114,8 @@ const router = Router();
  *               items: { type: string, example: "Hạ Long" }
  */
 router.get("/suggest", suggestDestinations);
+router.get("/departures/:id", getDepartureById);
+router.get("/:tourId/departures", listDepartures);
 
 /**
  * @openapi
@@ -298,7 +296,7 @@ router.get("/admin/:id", auth, adminOnly, getTourByIdAdmin);
  *       401: { description: Unauthorized }
  *       403: { description: Forbidden }
  */
-router.post("/", auth, adminOnly, createTourAdmin);
+router.post("/", auth, adminOnly, uploadBlogMem.any(), createTourAdmin);
 
 /**
  * @openapi
@@ -329,7 +327,7 @@ router.post("/", auth, adminOnly, createTourAdmin);
  *       400: { description: Invalid tour id }
  *       404: { description: Tour not found }
  */
-router.put("/:id", auth, adminOnly, updateTourAdmin);
+router.put("/:id", auth, adminOnly, uploadBlogMem.any(), updateTourAdmin);
 
 /**
  * @openapi

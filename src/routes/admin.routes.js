@@ -16,6 +16,18 @@ import {
   updateAdminLeader,
   deleteAdminLeader,
 } from "../controllers/admin.controller.js";
+import { uploadBlogMem } from "../middleware/upload.js";
+import {
+  createDeparture,
+  listDepartures,
+  getDepartureById,
+  patchDepartureStatus,
+  assignLeaderToDeparture,
+  addTimelineToDeparture,
+  createExpenseForDeparture,
+  listExpensesForDeparture,
+  listOngoingDepartures,
+} from "../controllers/departure.controller.js";
 
 const router = Router();
 
@@ -48,6 +60,8 @@ const router = Router();
  *         description: Login success
  */
 router.post("/login", adminLogin);
+
+
 
 // Dashboard stats
 router.get("/dashboard/stats", auth, adminOnly, getDashboardStats);
@@ -174,7 +188,24 @@ router.patch("/tours/:id/leader", auth, adminOnly, updateLeader);
  *       200:
  *         description: Timeline updated
  */
-router.post("/tours/:id/timeline", auth, adminOnly, addTimelineEvent);
+router.post("/tours/:id/timeline", auth, adminOnly, addTimelineEvent);  // legacy – dùng departure id
+
+// ==================== DEPARTURE ROUTES ====================
+
+// Lịch khởi hành của 1 Tour Template
+router.post("/tours/:tourId/departures", auth, adminOnly, createDeparture);
+router.get("/tours/:tourId/departures",  auth, adminOnly, listDepartures);
+
+// Các lịch khởi hành đang diễn ra (Dashboard)
+router.get("/departures/ongoing", auth, adminOnly, listOngoingDepartures);
+
+// Chi tiết / Trạng thái / Leader / Timeline / Expense cho 1 Departure
+router.get("/departures/:id",            auth, adminOnly, getDepartureById);
+router.patch("/departures/:id/status",   auth, adminOnly, patchDepartureStatus);
+router.patch("/departures/:id/leader",   auth, adminOnly, assignLeaderToDeparture);
+router.post("/departures/:id/timeline",  auth, adminOnly, addTimelineToDeparture);
+router.post("/departures/:id/expenses",  auth, adminOnly, createExpenseForDeparture);
+router.get("/departures/:id/expenses",   auth, adminOnly, listExpensesForDeparture);
 
 /**
  * @openapi
