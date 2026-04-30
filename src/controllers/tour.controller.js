@@ -4,7 +4,7 @@ import mongoose from "mongoose";
 
 export const getTours = async (req, res) => {
   const { page = 1, limit = 10, destination, title } = req.query;
-  const filter = {};
+  const filter = { status: "active" };
   
   if (destination) {
     const dSlug = destination
@@ -74,7 +74,7 @@ export const getTourById = async (req, res) => {
   const { id } = req.params;
   if (!mongoose.isValidObjectId(id))
     return res.status(400).json({ message: "Invalid tour id" });
-  const tour = await Tour.findById(id).lean();
+  const tour = await Tour.findOne({ _id: id, status: { $ne: "deleted" } }).lean();
   if (!tour) return res.status(404).json({ message: "Tour not found" });
   res.json(tour);
 };
@@ -168,7 +168,7 @@ export const suggestDestinations = async (req, res) => {
     const regex = new RegExp("^" + escapeRegex(slug));
 
     const rows = await Tour.aggregate([
-      { $match: { destinationSlug: { $regex: regex } } },
+      { $match: { destinationSlug: { $regex: regex }, status: "active" } },
       { $group: { _id: "$destination", cnt: { $sum: 1 } } },
       { $sort: { cnt: -1, _id: 1 } },
       { $limit: limit },
@@ -249,7 +249,7 @@ export const searchTours = async (req, res) => {
       limit = 10,
     } = req.query;
 
-    const filter = {};
+    const filter = { status: "active" };
 
     const qStr = q?.trim();
     if (qStr) {

@@ -9,7 +9,7 @@ import {
   suggestDestinations
 } from "../controllers/tour.controller.js";
 import { listDepartures, getDepartureById } from "../controllers/departure.controller.js";
-import { getAllTours, getTourByIdAdmin, createTourAdmin, updateTourAdmin, deleteTourAdmin } from "../controllers/admin.controller.js";
+import { getAllTours, getTourByIdAdmin, createTourAdmin, updateTourAdmin, deleteTourAdmin, getTourTimes } from "../controllers/admin.controller.js";
 import { auth, adminOnly } from "../middleware/auth.js";
 import { uploadBlogMem } from "../middleware/upload.js";
 
@@ -199,6 +199,28 @@ router.get("/search", searchTours);
  *         description: Danh sách tours
  */
 router.get("/admin", auth, adminOnly, getAllTours);
+
+/**
+ * @openapi
+ * /api/tours/admin/times:
+ *   get:
+ *     tags: [Tours]
+ *     summary: Lấy danh sách các giá trị time (thời gian tour) duy nhất
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Danh sách time
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 data:
+ *                   type: array
+ *                   items: { type: string, example: "3 ngày 2 đêm" }
+ */
+router.get("/admin/times", auth, adminOnly, getTourTimes);
 
 /**
  * @openapi

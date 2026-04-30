@@ -30,6 +30,11 @@ const tourSchema = new mongoose.Schema({
   description:     { type: String },
   destination:     { type: String },
   destinationSlug: { type: String, index: true },
+  status: { 
+    type: String, 
+    enum: ["active", "hidden", "paused", "deleted"], 
+    default: "active" 
+  },
 
   // Giá cơ sở (có thể bị ghi đè bởi TourDeparture)
   priceAdult:  { type: Number },

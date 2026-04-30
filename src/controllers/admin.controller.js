@@ -462,10 +462,16 @@ export const deleteExpense = async (req, res) => {
 // GET all tours (with filters)
 export const getAllTours = async (req, res) => {
   try {
-    const { page = 1, limit = 20, destination, search } = req.query;
-    // Lưu ý: status không còn ở Tour template, bỏ filter status
+    const { page = 1, limit = 20, destination, search, time, status } = req.query;
     
     const filter = {};
+    if (status) {
+      filter.status = status;
+    } else {
+      // Mặc định ẩn các tour đã xóa mềm
+      filter.status = { $ne: 'deleted' };
+    }
+    
     if (destination) filter.destinationSlug = new RegExp(destination
       .normalize("NFD").replace(/[\u0300-\u036f]/g,"")
       .toLowerCase().replace(/\s+/g," ").trim(), "i");
@@ -475,6 +481,9 @@ export const getAllTours = async (req, res) => {
         { description: { $regex: search, $options: "i" } },
         { destination: { $regex: search, $options: "i" } }
       ];
+    }
+    if (time && time.trim()) {
+      filter.time = { $regex: time.trim(), $options: "i" };
     }
 
     const p = Math.max(parseInt(page, 10) || 1, 1);
@@ -490,6 +499,20 @@ export const getAllTours = async (req, res) => {
     ]);
 
     res.json({ total, page: p, limit: l, data });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+};
+
+// GET distinct tour time values (for dropdown)
+export const getTourTimes = async (req, res) => {
+  try {
+    const times = await Tour.distinct("time");
+    // Lọc bỏ null/empty, sắp xếp
+    const filtered = times
+      .filter(t => t && t.trim())
+      .sort();
+    res.json({ data: filtered });
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
@@ -705,7 +728,11 @@ export const deleteTourAdmin = async (req, res) => {
       return res.status(400).json({ message: "Invalid tour ID" });
     }
 
-    const deletedTour = await Tour.findByIdAndDelete(id);
+    const deletedTour = await Tour.findByIdAndUpdate(
+      id,
+      { status: "deleted" },
+      { new: true }
+    );
 
     if (!deletedTour) {
       return res.status(404).json({ message: "Tour not found" });
