@@ -245,11 +245,16 @@ export const searchTours = async (req, res) => {
       to,
       budgetMin,
       budgetMax,
+      time,
       page = 1,
       limit = 10,
     } = req.query;
 
     const filter = { status: "active" };
+
+    if (time) {
+      filter.time = time;
+    }
 
     const qStr = q?.trim();
     if (qStr) {
@@ -317,10 +322,40 @@ export const searchTours = async (req, res) => {
       { $limit: l }
     ];
 
-    const [data, total] = await Promise.all([
+    const countPipeline = [
+      { $match: filter },
+      {
+        $lookup: {
+          from: "tbl_tour_departures",
+          let: { tourId: "$_id" },
+          pipeline: [
+            { $match: { 
+                $expr: { $eq: ["$tourId", "$$tourId"] },
+                startDate: { $gte: today },
+                status: { $ne: "closed" }
+            } },
+            ...( (from || to) ? [
+                 { $match: {
+                    startDate: {
+                      ...(from ? { $gte: new Date(from) } : {}),
+                      ...(to ? { $lte: new Date(to) } : {})
+                    }
+                 } }
+            ] : []),
+          ],
+          as: "upcomingDepartures"
+        }
+      },
+      ...( (from || to) ? [{ $match: { "upcomingDepartures.0": { $exists: true } } }] : []),
+      { $count: "total" }
+    ];
+
+    const [data, countResult] = await Promise.all([
       Tour.aggregate(pipeline),
-      Tour.countDocuments(filter), 
+      Tour.aggregate(countPipeline),
     ]);
+
+    const total = countResult[0]?.total || 0;
 
     res.json({ total, page: p, limit: l, data });
   } catch (err) {
