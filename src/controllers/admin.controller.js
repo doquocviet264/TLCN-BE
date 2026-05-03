@@ -83,7 +83,14 @@ export const getDashboardStats = async (req, res) => {
       yearlyRevenue,
       recentBookings,
       popularTours,
-      averageRating
+      averageRating,
+      // New stats
+      monthlyRevenueData,
+      monthlyBookingsData,
+      topDestinations,
+      bookingStatusData,
+      topRevenueTours,
+      newUsersThisMonth
     ] = await Promise.all([
       // Basic counts
       User.countDocuments({ status: 'y' }),
@@ -91,32 +98,32 @@ export const getDashboardStats = async (req, res) => {
       Booking.countDocuments(),
       Review.countDocuments(),
       BlogPost.countDocuments(),
-      
+
       // Active departures (confirmed + in_progress)
       TourDeparture.countDocuments({ status: { $in: ['confirmed', 'in_progress'] } }),
-      
+
       // Monthly bookings
-      Booking.countDocuments({ 
+      Booking.countDocuments({
         createdAt: { $gte: startOfMonth },
         bookingStatus: { $ne: 'x' }
       }),
-      
+
       // Yearly revenue
       Booking.aggregate([
-        { 
-          $match: { 
+        {
+          $match: {
             createdAt: { $gte: startOfYear },
             bookingStatus: 'c'
           }
         },
-        { 
-          $group: { 
-            _id: null, 
-            total: { $sum: '$totalPrice' } 
+        {
+          $group: {
+            _id: null,
+            total: { $sum: '$totalPrice' }
           }
         }
       ]),
-      
+
       // Recent bookings
       Booking.find({ bookingStatus: { $ne: 'x' } })
         .populate('userId', 'fullName email')
@@ -124,13 +131,13 @@ export const getDashboardStats = async (req, res) => {
         .sort({ createdAt: -1 })
         .limit(5)
         .lean(),
-      
+
       // Popular tours (most bookings)
       Booking.aggregate([
         { $match: { bookingStatus: { $ne: 'x' } } },
-        { 
-          $group: { 
-            _id: '$tourDepartureId', 
+        {
+          $group: {
+            _id: '$tourDepartureId',
             bookingCount: { $sum: 1 },
             totalGuests: { $sum: { $add: ['$numAdults', '$numChildren'] } }
           }
@@ -156,17 +163,178 @@ export const getDashboardStats = async (req, res) => {
         },
         { $unwind: { path: '$tour', preserveNullAndEmptyArrays: true } }
       ]),
-      
+
       // Average rating
       Review.aggregate([
-        { 
-          $group: { 
-            _id: null, 
-            avgRating: { $avg: '$rating' } 
+        {
+          $group: {
+            _id: null,
+            avgRating: { $avg: '$rating' }
           }
         }
-      ])
+      ]),
+
+      // Monthly revenue chart (12 months of current year)
+      Booking.aggregate([
+        {
+          $match: {
+            createdAt: { $gte: startOfYear },
+            bookingStatus: 'c'
+          }
+        },
+        {
+          $group: {
+            _id: { $month: '$createdAt' },
+            revenue: { $sum: '$totalPrice' },
+            bookings: { $sum: 1 }
+          }
+        },
+        { $sort: { _id: 1 } }
+      ]),
+
+      // Monthly bookings chart (12 months)
+      Booking.aggregate([
+        {
+          $match: {
+            createdAt: { $gte: startOfYear },
+            bookingStatus: { $ne: 'x' }
+          }
+        },
+        {
+          $group: {
+            _id: { $month: '$createdAt' },
+            count: { $sum: 1 },
+            guests: { $sum: { $add: ['$numAdults', '$numChildren'] } }
+          }
+        },
+        { $sort: { _id: 1 } }
+      ]),
+
+      // Top destinations by booking count
+      Booking.aggregate([
+        { $match: { bookingStatus: { $ne: 'x' } } },
+        {
+          $lookup: {
+            from: 'tbl_tour_departures',
+            localField: 'tourDepartureId',
+            foreignField: '_id',
+            as: 'departure'
+          }
+        },
+        { $unwind: { path: '$departure', preserveNullAndEmptyArrays: true } },
+        {
+          $lookup: {
+            from: 'tbl_tours',
+            localField: 'departure.tourId',
+            foreignField: '_id',
+            as: 'tour'
+          }
+        },
+        { $unwind: { path: '$tour', preserveNullAndEmptyArrays: true } },
+        {
+          $group: {
+            _id: '$tour.destination',
+            bookings: { $sum: 1 },
+            revenue: { $sum: '$totalPrice' },
+            guests: { $sum: { $add: ['$numAdults', '$numChildren'] } }
+          }
+        },
+        { $match: { _id: { $ne: null } } },
+        { $sort: { bookings: -1 } },
+        { $limit: 6 }
+      ]),
+
+      // Booking status statistics with revenue
+      Booking.aggregate([
+        {
+          $group: {
+            _id: '$bookingStatus',
+            count: { $sum: 1 },
+            revenue: { $sum: '$totalPrice' }
+          }
+        }
+      ]),
+
+      // Top revenue tours
+      Booking.aggregate([
+        { $match: { bookingStatus: 'c' } },
+        {
+          $lookup: {
+            from: 'tbl_tour_departures',
+            localField: 'tourDepartureId',
+            foreignField: '_id',
+            as: 'departure'
+          }
+        },
+        { $unwind: { path: '$departure', preserveNullAndEmptyArrays: true } },
+        {
+          $lookup: {
+            from: 'tbl_tours',
+            localField: 'departure.tourId',
+            foreignField: '_id',
+            as: 'tour'
+          }
+        },
+        { $unwind: { path: '$tour', preserveNullAndEmptyArrays: true } },
+        {
+          $group: {
+            _id: '$tour._id',
+            title: { $first: '$tour.title' },
+            destination: { $first: '$tour.destination' },
+            revenue: { $sum: '$totalPrice' },
+            bookings: { $sum: 1 }
+          }
+        },
+        { $match: { _id: { $ne: null } } },
+        { $sort: { revenue: -1 } },
+        { $limit: 5 }
+      ]),
+
+      // New users this month
+      User.countDocuments({
+        createdAt: { $gte: startOfMonth },
+        status: 'y'
+      })
     ]);
+
+    // Format monthly revenue for chart (fill all 12 months)
+    const monthNames = ['T1', 'T2', 'T3', 'T4', 'T5', 'T6', 'T7', 'T8', 'T9', 'T10', 'T11', 'T12'];
+    const monthlyRevenue = monthNames.map((month, index) => {
+      const data = monthlyRevenueData.find(d => d._id === index + 1);
+      return {
+        month,
+        monthIndex: index + 1,
+        revenue: data?.revenue || 0,
+        bookings: data?.bookings || 0
+      };
+    });
+
+    // Format monthly bookings for chart
+    const monthlyBookingsChart = monthNames.map((month, index) => {
+      const data = monthlyBookingsData.find(d => d._id === index + 1);
+      return {
+        month,
+        monthIndex: index + 1,
+        count: data?.count || 0,
+        guests: data?.guests || 0
+      };
+    });
+
+    // Format booking status stats
+    const bookingStatusStats = {
+      confirmed: { count: 0, revenue: 0 },
+      pending: { count: 0, revenue: 0 },
+      cancelled: { count: 0, revenue: 0 }
+    };
+    bookingStatusData.forEach(item => {
+      if (item._id === 'c') {
+        bookingStatusStats.confirmed = { count: item.count, revenue: item.revenue };
+      } else if (item._id === 'p') {
+        bookingStatusStats.pending = { count: item.count, revenue: item.revenue };
+      } else if (item._id === 'x') {
+        bookingStatusStats.cancelled = { count: item.count, revenue: item.revenue };
+      }
+    });
 
     // Format stats
     const stats = {
@@ -179,7 +347,8 @@ export const getDashboardStats = async (req, res) => {
         activeTours,
         monthlyBookings,
         yearlyRevenue: yearlyRevenue[0]?.total || 0,
-        averageRating: averageRating[0]?.avgRating || 0
+        averageRating: averageRating[0]?.avgRating || 0,
+        newUsersThisMonth
       },
       recentBookings: recentBookings.map(booking => ({
         _id: booking._id,
@@ -209,7 +378,24 @@ export const getDashboardStats = async (req, res) => {
         inProgress: 0,
         completed: 0,
         closed: 0
-      }
+      },
+      // New chart data
+      monthlyRevenue,
+      monthlyBookingsChart,
+      topDestinations: topDestinations.map(d => ({
+        name: d._id,
+        bookings: d.bookings,
+        revenue: d.revenue,
+        guests: d.guests
+      })),
+      bookingStatusStats,
+      topRevenueTours: topRevenueTours.map(t => ({
+        _id: t._id,
+        title: t.title,
+        destination: t.destination,
+        revenue: t.revenue,
+        bookings: t.bookings
+      }))
     };
 
     // Get departure status distribution (status now lives on TourDeparture)

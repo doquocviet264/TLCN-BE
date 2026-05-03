@@ -18,14 +18,16 @@ import swaggerUi from "swagger-ui-express";
 import chatRoutes from "./routes/chat.routes.js";
 import { swaggerSpec } from "./config/swagger.js";
 import blogRouter from "./routes/blog.routes.js";
-import checkinRoutes from "./routes/checkin.routes.js"; // <--- Import file vừa tạo
+import checkinRoutes from "./routes/checkin.routes.js";
 import wardRoutes from "./routes/ward.routes.js";
+import recommendationRoutes from "./routes/recommendations.routes.js"; // ← MỚI
 
 import { registerConfirmOrRefundJob } from "./jobs/confirmOrRefund.job.js";
 
 const app = express();
 
 app.use("/uploads", express.static(path.resolve("uploads")));
+
 /* =========================
  *  CORS + BODY + COOKIES
  * ========================= */
@@ -37,12 +39,12 @@ const ALLOW_ORIGINS = (
   .split(",")
   .map((s) => s.trim());
 
-app.set("trust proxy", true); // cần cho cookie secure khi deploy sau này
+app.set("trust proxy", true);
 
 app.use(
   cors({
     origin(origin, cb) {
-      if (!origin) return cb(null, true); // Postman/cURL
+      if (!origin) return cb(null, true);
       if (!isProd) return cb(null, true);
       {
         return cb(null, true);
@@ -53,17 +55,14 @@ app.use(
     credentials: true,
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allowedHeaders: ["Content-Type", "Authorization"],
-  })
+  }),
 );
-// preflight nhanh
-//app.options("*", cors());
 
 app.use(express.json());
 app.use(cookieParser());
 
 /* =========================
  *  SESSION + PASSPORT
- *  (dùng cho OAuth Google)
  * ========================= */
 app.use(
   session({
@@ -71,11 +70,11 @@ app.use(
     resave: false,
     saveUninitialized: false,
     cookie: {
-      secure: isProd, // production (https) = true
+      secure: isProd,
       sameSite: isProd ? "none" : "lax",
       httpOnly: true,
     },
-  })
+  }),
 );
 app.use(passport.initialize());
 app.use(passport.session());
@@ -102,6 +101,7 @@ app.use("/api/chat", chatRoutes);
 app.use("/api/blog", blogRouter);
 app.use("/api/checkins", checkinRoutes);
 app.use("/api/wards", wardRoutes);
+app.use("/api/recommendations", recommendationRoutes); // ← MỚI
 
 /* =========================
  *  404 FALLBACK
