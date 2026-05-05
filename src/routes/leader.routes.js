@@ -7,6 +7,7 @@ import {
   leaderAddTimeline,
   leaderCreateExpense,
   leaderGetExpenses,
+  leaderGetTourBookings,
 } from "../controllers/leader.controller.js";
 
 const router = Router();
@@ -152,6 +153,7 @@ router.get("/departures/:id/expenses",  auth, leaderOnly, leaderGetExpenses);
 // Giữ để không break các client cũ đang call /leader/tours
 router.get("/tours",              auth, leaderOnly, leaderMyTours);
 router.get("/tours/:id",          auth, leaderOnly, leaderGetDeparture);
+router.get("/tours/:id/bookings", auth, leaderOnly, leaderGetTourBookings);
 router.post("/tours/:id/timeline", auth, leaderOnly, leaderOwnsDeparture, leaderAddTimeline);
 router.post("/tours/:id/expenses", auth, leaderOnly, leaderOwnsDeparture, leaderCreateExpense);
 

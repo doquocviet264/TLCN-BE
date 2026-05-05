@@ -2,6 +2,7 @@
 import mongoose from "mongoose";
 import { Booking } from "../models/Booking.js";
 import { Tour } from "../models/Tour.js";
+import { TourDeparture } from "../models/TourDeparture.js";
 import { Chat } from "../models/Chat.js";
 
 /* Helper: xác định role từ token */
@@ -35,24 +36,49 @@ async function canAccessBooking(user, booking) {
   return false;
 }
 
-/* Kiểm tra quyền vào nhóm chat tour */
-async function canAccessTourRoom(user, tourId) {
+/* Kiểm tra quyền vào nhóm chat tour
+   Lưu ý: roomId có thể là tourId hoặc departureId
+   - Nếu là departureId: Kiểm tra quyền dựa trên TourDeparture
+   - Nếu là tourId: Kiểm tra quyền dựa trên Tour (backward compat)
+*/
+async function canAccessTourRoom(user, roomId) {
   const role = getRole(user);
   if (!user) return false;
   if (role === "admin") return true;
 
-  if (!mongoose.isValidObjectId(tourId)) return false;
+  if (!mongoose.isValidObjectId(roomId)) return false;
 
+  // Thử tìm TourDeparture trước (chat theo departure)
+  const departure = await TourDeparture.findById(roomId).select("leaderId tourId");
+
+  if (departure) {
+    // Nếu là departure ID
+    if (role === "leader") {
+      if (departure.leaderId && String(departure.leaderId) === String(user.id)) return true;
+    }
+
+    if (role === "user") {
+      const hasBooking = await Booking.exists({
+        tourDepartureId: roomId,
+        userId: user.id,
+        bookingStatus: { $ne: "x" },
+      });
+      if (hasBooking) return true;
+    }
+    return false;
+  }
+
+  // Fallback: Kiểm tra nếu là Tour ID (backward compat)
   if (role === "leader") {
-    const tour = await Tour.findById(tourId).select("leaderId");
+    const tour = await Tour.findById(roomId).select("leaderId");
     if (tour && String(tour.leaderId) === String(user.id)) return true;
   }
 
   if (role === "user") {
     const hasBooking = await Booking.exists({
-      tourId,
+      tourId: roomId,
       userId: user.id,
-      bookingStatus: { $ne: "x" }, // exclude canceled
+      bookingStatus: { $ne: "x" },
     });
     if (hasBooking) return true;
   }
@@ -405,22 +431,50 @@ export const getAllTourChats = async (req, res) => {
         },
       },
       { $sort: { lastTime: -1 } },
+      // Try lookup as departure first
       {
         $lookup: {
-          from: "tbl_tour", // ⚠️ CHECK TÊN COLLECTION DB
+          from: "tbl_tour_departures",
           localField: "tourId",
           foreignField: "_id",
+          as: "departure",
+        },
+      },
+      // Lookup tour từ departure hoặc trực tiếp
+      {
+        $lookup: {
+          from: "tbl_tour",
+          let: {
+            depTourId: { $arrayElemAt: ["$departure.tourId", 0] },
+            directTourId: "$tourId"
+          },
+          pipeline: [
+            {
+              $match: {
+                $expr: {
+                  $or: [
+                    { $eq: ["$_id", "$$depTourId"] },
+                    { $eq: ["$_id", "$$directTourId"] }
+                  ]
+                }
+              }
+            }
+          ],
           as: "tour",
         },
       },
       {
         $addFields: {
           tourTitle: { $arrayElemAt: ["$tour.title", 0] },
+          startDate: { $arrayElemAt: ["$departure.startDate", 0] },
+          endDate: { $arrayElemAt: ["$departure.endDate", 0] },
+          isDeparture: { $gt: [{ $size: "$departure" }, 0] },
         },
       },
       {
         $project: {
           tour: 0,
+          departure: 0,
         },
       },
     ]);

@@ -180,3 +180,55 @@ export const leaderGetExpenses = async (req, res) => {
     res.status(500).json({ message: err.message });
   }
 };
+
+/* ========================================================
+ *  7. Danh sách khách đã đặt tour (với format cho chat)
+ *  GET /api/leader/tours/:id/bookings
+ * ======================================================== */
+export const leaderGetTourBookings = async (req, res) => {
+  try {
+    const { id } = req.params;
+    if (!mongoose.isValidObjectId(id))
+      return res.status(400).json({ message: "Invalid departure ID" });
+
+    // Kiểm tra leader có sở hữu departure này không
+    const departure = await TourDeparture.findOne({ _id: id, leaderId: req.user.id })
+      .populate("tourId", "title")
+      .lean();
+    if (!departure) return res.status(403).json({ message: "Forbidden (not your departure)" });
+
+    const bookings = await Booking.find({
+      tourDepartureId: id,
+      bookingStatus: { $ne: "x" } // Loại trừ booking đã hủy
+    })
+      .populate("userId", "fullName email phoneNumber avatar")
+      .select("code userId fullName email phoneNumber numAdults numChildren totalPrice bookingStatus paidAmount depositPaid createdAt")
+      .sort({ createdAt: 1 })
+      .lean();
+
+    // Format theo cấu trúc frontend cần
+    const formattedBookings = bookings.map(b => ({
+      _id: b._id,
+      code: b.code,
+      userId: b.userId?._id?.toString(),
+      customerName: b.userId?.fullName || b.fullName || "Khách hàng",
+      customerEmail: b.userId?.email || b.email,
+      customerPhone: b.userId?.phoneNumber || b.phoneNumber,
+      customerAvatar: b.userId?.avatar || null,
+      guestCount: (b.numAdults || 0) + (b.numChildren || 0),
+      totalPrice: b.totalPrice,
+      bookingStatus: b.bookingStatus,
+      paymentStatus: b.depositPaid ? "paid" : "pending",
+      createdAt: b.createdAt,
+    }));
+
+    res.json({
+      tourId: id,
+      tourTitle: departure.tourId?.title || "Tour",
+      total: formattedBookings.length,
+      data: formattedBookings
+    });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+};
