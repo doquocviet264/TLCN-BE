@@ -82,10 +82,6 @@ export const createBooking = async (req, res) => {
     const priceChild = departure.priceChild ?? tour.priceChild ?? Math.round(priceAdult * 0.6);
     const totalPrice = Number(numAdults) * priceAdult + Number(numChildren) * priceChild;
 
-    const alreadyConfirmed = departure.status === "confirmed" || (departure.current_guests + guestsRequested) >= (departure.min_guests || 0);
-    const depositRate = alreadyConfirmed ? 1 : Number(process.env.BOOKING_DEPOSIT_RATE ?? 0.2);
-    const depositAmount = Math.round(totalPrice * depositRate);
-
     const code = "BK" + Math.random().toString(36).slice(2, 8).toUpperCase();
 
     // Tạo booking liên kết với tourDepartureId
@@ -102,15 +98,14 @@ export const createBooking = async (req, res) => {
           note,
           numAdults,
           numChildren,
+          priceAdultSnapshot: priceAdult,
+          priceChildSnapshot: priceChild,
           totalPrice,
-          bookingStatus: "p",
-          depositRate,
-          depositAmount,
+          bookingStatus: "pending",
           paymentMethod: "momo",
           paidAmount: 0,
           depositPaid: false,
           paymentRefs: [],
-          requireFullPayment: alreadyConfirmed,
         },
       ],
       { session }
@@ -140,7 +135,7 @@ export const createBooking = async (req, res) => {
       message: "Booking created successfully",
       code: booking.code,
       total: booking.totalPrice,
-      depositAmount: booking.depositAmount,
+      depositAmount: Math.round(booking.totalPrice * 0.5),
       booking,
     });
   } catch (err) {
@@ -184,14 +179,20 @@ export const onPaymentReceived = async (req, res) => {
       at: new Date(),
     });
 
-    if (isFirstDeposit) booking.depositPaid = true;
-    if (booking.paidAmount >= booking.totalPrice) booking.bookingStatus = "c";
+    // Logic trạng thái: cọc ≥ 50% → confirmed, đủ 100% → completed
+    const depositThreshold = booking.totalPrice * 0.5;
+    if (!booking.depositPaid && booking.paidAmount >= depositThreshold) {
+      booking.depositPaid = true;
+      if (booking.bookingStatus === "pending") booking.bookingStatus = "confirmed";
+    }
+    if (booking.paidAmount >= booking.totalPrice) {
+      booking.bookingStatus = "completed";
+    }
 
     await booking.save();
 
     // --- GỬI EMAIL BIÊN LAI THANH TOÁN ---
     if (booking.email && Number(amount) > 0) {
-      const isFullPaid = booking.paidAmount >= booking.totalPrice;
       sendMail({
         to: booking.email,
         subject: `💸 Xác nhận thanh toán - Đơn #${booking.code}`,
@@ -200,11 +201,9 @@ export const onPaymentReceived = async (req, res) => {
     }
     // -------------------------------------
 
-    // Auto confirm tour nếu đủ khách
+    // Auto confirm departure nếu đủ khách
     if (isFirstDeposit) {
       const departure = await TourDeparture.findById(booking.tourDepartureId);
-
-      // Auto confirm departure nếu đủ khách
       if (
         departure &&
         (departure.current_guests || 0) >= (departure.min_guests || 0) &&
@@ -214,9 +213,6 @@ export const onPaymentReceived = async (req, res) => {
       ) {
         departure.status = "confirmed";
         await departure.save();
-
-        // Gửi mail thông báo tour khởi hành cho TẤT CẢ khách của lịch này
-        // (Cần cập nhật notifyTourConfirmed hỗ trợ tourDepartureId nếu cần, hoặc dùng tourId gốc)
         await notifyTourConfirmed(departure.tourId).catch(console.error);
       }
     }
@@ -275,13 +271,13 @@ export const cancelBookingByUser = async (req, res) => {
   const bk = await Booking.findOne({ code, userId: req.user.id });
 
   if (!bk) return res.status(404).json({ message: "Booking not found" });
-  if (bk.bookingStatus !== "p") {
+  if (bk.bookingStatus !== "pending") {
     return res
       .status(400)
       .json({ message: "Only pending bookings can be canceled" });
   }
 
-  bk.bookingStatus = "x";
+  bk.bookingStatus = "cancelled";
   await bk.save();
 
   // Trả lại slot khi hủy booking ở Departure
@@ -344,18 +340,108 @@ export const getMyBookingDetail = async (req, res) => {
 
 // ==================== ADMIN ENDPOINTS ====================
 
-// 6. Admin: Lấy danh sách Booking (Có lọc)
+// 6. Admin: Lấy danh sách Booking (Có lọc nâng cao)
 export const getAdminBookings = async (req, res) => {
   try {
     const page = Math.max(parseInt(req.query.page || "1", 10), 1);
     const limit = Math.min(parseInt(req.query.limit || "20", 10), 50);
     const skip = (page - 1) * limit;
 
+    const { 
+      status, 
+      tourId, 
+      search, 
+      startDate, 
+      endDate, 
+      paymentStatus, 
+      customerType, 
+      paymentMethod 
+    } = req.query;
+
     const filter = {};
-    if (req.query.status && req.query.status.trim())
-      filter.bookingStatus = req.query.status;
-    if (req.query.tourId && mongoose.isValidObjectId(req.query.tourId))
-      filter.tourDepartureId = req.query.tourId;
+
+    // 1. Lọc theo trạng thái đơn hàng (pending, confirmed, etc.)
+    if (status && status.trim()) {
+      filter.bookingStatus = status;
+    }
+
+    // 2. Lọc theo Tour Template cụ thể
+    if (tourId && mongoose.isValidObjectId(tourId)) {
+      // Tìm tất cả các departure của tour này
+      const departuresOfTour = await TourDeparture.find({ tourId }).select("_id");
+      const departureIds = departuresOfTour.map(d => d._id);
+      filter.tourDepartureId = { $in: departureIds };
+    }
+
+    // 3. Lọc theo khoảng ngày khởi hành (Departure Date Range)
+    if (startDate || endDate) {
+      const dateFilter = {};
+      if (startDate) dateFilter.$gte = new Date(startDate);
+      if (endDate) {
+        const eDate = new Date(endDate);
+        eDate.setHours(23, 59, 59, 999);
+        dateFilter.$lte = eDate;
+      }
+      
+      const matchingDepartures = await TourDeparture.find({ 
+        startDate: dateFilter 
+      }).select("_id");
+      
+      const matchingDepartureIds = matchingDepartures.map(d => d._id);
+      
+      if (filter.tourDepartureId) {
+        // Nếu đã có lọc tourId, lấy giao điểm
+        const existingIds = filter.tourDepartureId.$in.map(id => id.toString());
+        const intersection = matchingDepartureIds.filter(id => existingIds.includes(id.toString()));
+        filter.tourDepartureId = { $in: intersection };
+      } else {
+        filter.tourDepartureId = { $in: matchingDepartureIds };
+      }
+    }
+
+    // 4. Lọc theo tình trạng thanh toán
+    if (paymentStatus) {
+      switch (paymentStatus) {
+        case "unpaid":
+          filter.paidAmount = 0;
+          break;
+        case "deposited":
+          // Đã trả > 0 nhưng chưa đủ 100%
+          filter.$and = filter.$and || [];
+          filter.$and.push({ paidAmount: { $gt: 0 } });
+          filter.$and.push({ $expr: { $lt: ["$paidAmount", "$totalPrice"] } });
+          break;
+        case "full":
+          filter.$expr = { $gte: ["$paidAmount", "$totalPrice"] };
+          break;
+      }
+    }
+
+    // 5. Lọc theo loại khách hàng
+    if (customerType) {
+      if (customerType === "member") {
+        filter.userId = { $ne: null };
+      } else if (customerType === "guest") {
+        filter.userId = null;
+      }
+    }
+
+    // 6. Lọc theo phương thức thanh toán
+    if (paymentMethod) {
+      filter.paymentMethod = paymentMethod;
+    }
+
+    // 7. Tìm kiếm (fullName, email, code, phone)
+    if (search && search.trim()) {
+      const s = search.trim();
+      const searchRegex = { $regex: s, $options: "i" };
+      filter.$or = [
+        { fullName: searchRegex },
+        { email: searchRegex },
+        { code: searchRegex },
+        { phoneNumber: searchRegex },
+      ];
+    }
 
     const total = await Booking.countDocuments(filter);
     let bookings = await Booking.find(filter)
@@ -372,7 +458,7 @@ export const getAdminBookings = async (req, res) => {
       .limit(limit)
       .lean();
 
-    // Mapping lại dữ liệu để FE nhận được như cũ
+    // Mapping lại dữ liệu để tương thích với FE
     bookings = bookings.map((b) => {
       if (b.tourDepartureId) {
         b.tourId = {
@@ -386,20 +472,7 @@ export const getAdminBookings = async (req, res) => {
       return b;
     });
 
-    // Search thủ công (nếu cần filter phức tạp hơn)
-    let filteredBookings = bookings;
-    if (req.query.search && req.query.search.trim()) {
-      const s = req.query.search.toLowerCase();
-      filteredBookings = bookings.filter(
-        (b) =>
-          b.fullName?.toLowerCase().includes(s) ||
-          b.email?.toLowerCase().includes(s) ||
-          b.code?.toLowerCase().includes(s) ||
-          b.phoneNumber?.includes(s)
-      );
-    }
-
-    res.json({ total, page, limit, data: filteredBookings });
+    res.json({ total, page, limit, data: bookings });
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
@@ -441,13 +514,154 @@ export const getAdminBookingById = async (req, res) => {
   }
 };
 
-// 8. Admin: Cập nhật trạng thái Booking
+// 8. Admin: Tạo Booking (Khách vãng lai hoặc chọn User)
+export const adminCreateBooking = async (req, res) => {
+  const session = await mongoose.startSession();
+  try {
+    await session.startTransaction();
+
+    const {
+      tourDepartureId,
+      userId,
+      fullName,
+      email,
+      phoneNumber,
+      address,
+      note,
+      numAdults = 1,
+      numChildren = 0,
+      paymentMethod = "manual",
+      paidAmount = 0,
+    } = req.body;
+
+    if (!mongoose.isValidObjectId(tourDepartureId)) {
+      return res.status(400).json({ message: "Invalid tourDepartureId" });
+    }
+
+    const departure = await TourDeparture.findById(tourDepartureId).populate("tourId").session(session);
+    if (!departure) return res.status(404).json({ message: "Lịch khởi hành không tồn tại" });
+    if (departure.status === "closed") return res.status(400).json({ message: "Lịch khởi hành này đã đóng" });
+
+    const guestsRequested = Number(numAdults) + Number(numChildren);
+    if (guestsRequested <= 0) return res.status(400).json({ message: "Số lượng khách không hợp lệ" });
+
+    if (Number.isFinite(departure.max_guests)) {
+      const after = (departure.current_guests || 0) + guestsRequested;
+      if (after > departure.max_guests) {
+        return res.status(400).json({
+          message: "Lịch khởi hành này đã hết chỗ",
+          available: Math.max(0, departure.max_guests - (departure.current_guests || 0)),
+        });
+      }
+    }
+
+    const tour = departure.tourId;
+    const priceAdult = departure.priceAdult ?? tour.priceAdult ?? 0;
+    const priceChild = departure.priceChild ?? tour.priceChild ?? Math.round(priceAdult * 0.6);
+    const totalPrice = Number(numAdults) * priceAdult + Number(numChildren) * priceChild;
+
+    const code = "BK" + Math.random().toString(36).slice(2, 8).toUpperCase();
+
+    // Logic payment & status cho Admin create
+    let depositPaid = false;
+    let bookingStatus = "pending";
+    const paymentRefs = [];
+
+    if (Number(paidAmount) > 0) {
+      paymentRefs.push({
+        provider: paymentMethod,
+        ref: `ADMIN_${Date.now()}`,
+        amount: Number(paidAmount),
+        at: new Date(),
+        note: "Admin created booking",
+      });
+      const depositThreshold = totalPrice * 0.5;
+      if (paidAmount >= depositThreshold) {
+        depositPaid = true;
+        bookingStatus = "confirmed";
+      }
+      if (paidAmount >= totalPrice) {
+        bookingStatus = "completed";
+      }
+    }
+
+    const [booking] = await Booking.create(
+      [
+        {
+          code,
+          tourDepartureId,
+          userId: userId || null, // null for walk-in
+          fullName,
+          email,
+          phoneNumber,
+          address,
+          note,
+          numAdults,
+          numChildren,
+          priceAdultSnapshot: priceAdult,
+          priceChildSnapshot: priceChild,
+          totalPrice,
+          bookingStatus,
+          paymentMethod,
+          paidAmount: Number(paidAmount),
+          depositPaid,
+          paymentRefs,
+          isAdminCreated: true,
+        },
+      ],
+      { session }
+    );
+
+    await TourDeparture.updateOne(
+      { _id: tourDepartureId },
+      { $inc: { current_guests: guestsRequested } },
+      { session }
+    );
+
+    // Auto confirm departure if enough guests
+    if (depositPaid && (departure.current_guests || 0) + guestsRequested >= (departure.min_guests || 0)) {
+       if (departure.status !== "confirmed" && departure.status !== "in_progress" && departure.status !== "completed") {
+         await TourDeparture.updateOne({ _id: tourDepartureId }, { $set: { status: "confirmed" } }, { session });
+         notifyTourConfirmed(tour._id).catch(console.error);
+       }
+    }
+
+    await session.commitTransaction();
+    session.endSession();
+
+    if (booking.email) {
+      sendMail({
+        to: booking.email,
+        subject: `✅ Xác nhận đặt tour: ${tour.title} (#${booking.code})`,
+        html: getBookingCreatedTemplate(booking, tour),
+      }).catch((err) => console.error("Send booking mail error:", err));
+    }
+
+    return res.status(201).json({
+      message: "Booking created successfully",
+      booking,
+    });
+  } catch (err) {
+    try { if (session.inTransaction()) await session.abortTransaction(); } catch { }
+    try { session.endSession(); } catch { }
+    return res.status(500).json({ message: err.message });
+  }
+};
+
+// 9. Admin: Cập nhật trạng thái Booking
 export const updateAdminBookingStatus = async (req, res) => {
   try {
-    const { status } = req.body;
+    const { status, cancelReason } = req.body;
+    const allowed = ["pending", "confirmed", "completed", "cancelled"];
+    if (!allowed.includes(status)) {
+      return res.status(400).json({ message: "Invalid status" });
+    }
+    const update = { bookingStatus: status };
+    if (status === "cancelled" && cancelReason) update.cancelReason = cancelReason;
+
     const booking = await Booking.findByIdAndUpdate(
       req.params.id,
-      { bookingStatus: status },
+      update,
       { new: true }
     )
       .populate({
@@ -459,8 +673,8 @@ export const updateAdminBookingStatus = async (req, res) => {
 
     if (!booking) return res.status(404).json({ message: "Not found" });
 
-    // Nếu Admin xác nhận Tour (status -> 'c'), gửi mail thông báo
-    if (status === "c" && booking.tourDepartureId && booking.tourDepartureId.tourId) {
+    // Nếu Admin xác nhận Tour, gửi mail thông báo
+    if (status === "confirmed" && booking.tourDepartureId && booking.tourDepartureId.tourId) {
       notifyTourConfirmed(booking.tourDepartureId.tourId._id).catch(console.error);
     }
 
@@ -485,6 +699,14 @@ export const deleteAdminBooking = async (req, res) => {
   try {
     const booking = await Booking.findByIdAndDelete(req.params.id);
     if (!booking) return res.status(404).json({ message: "Not found" });
+    // Hoàn trả slot khi xóa booking
+    const guestsToRelease = (booking.numAdults || 0) + (booking.numChildren || 0);
+    if (guestsToRelease > 0 && booking.tourDepartureId) {
+      await TourDeparture.updateOne(
+        { _id: booking.tourDepartureId },
+        { $inc: { current_guests: -guestsToRelease } }
+      );
+    }
     res.json({ message: "Deleted", booking });
   } catch (err) {
     res.status(500).json({ message: err.message });
@@ -511,9 +733,12 @@ export const updateAdminBookingPayment = async (req, res) => {
         at: new Date(),
       });
 
-      if (!booking.depositPaid && paymentAmount >= booking.depositAmount)
+      const depositThreshold = booking.totalPrice * 0.5;
+      if (!booking.depositPaid && booking.paidAmount >= depositThreshold) {
         booking.depositPaid = true;
-      if (booking.paidAmount >= booking.totalPrice) booking.bookingStatus = "c";
+        if (booking.bookingStatus === "pending") booking.bookingStatus = "confirmed";
+      }
+      if (booking.paidAmount >= booking.totalPrice) booking.bookingStatus = "completed";
 
       await booking.save();
 
@@ -606,15 +831,13 @@ export const bulkMarkBookingsPaid = async (req, res) => {
       });
 
       // Update trạng thái
-      if (
-        !booking.depositPaid &&
-        paymentAmount >= (booking.depositAmount || 0)
-      ) {
+      const depositThreshold2 = booking.totalPrice * 0.5;
+      if (!booking.depositPaid && booking.paidAmount >= depositThreshold2) {
         booking.depositPaid = true;
+        if (booking.bookingStatus === "pending") booking.bookingStatus = "confirmed";
       }
-
       if (booking.paidAmount >= booking.totalPrice) {
-        booking.bookingStatus = "c";
+        booking.bookingStatus = "completed";
       }
 
       await booking.save();
@@ -672,12 +895,12 @@ export const refundBookingPayment = async (req, res) => {
 
     // Cập nhật lại trạng thái nếu bị hụt tiền
     if (booking.paidAmount < booking.totalPrice) {
-      // Nếu đang là 'completed' mà hoàn tiền -> quay về 'pending'
-      if (booking.bookingStatus === "c") booking.bookingStatus = "p";
-
-      // Nếu số tiền còn lại nhỏ hơn cọc -> mất trạng thái cọc
-      if (booking.paidAmount < (booking.depositAmount || 0))
+      if (booking.bookingStatus === "completed") booking.bookingStatus = "confirmed";
+      const depositThreshold3 = booking.totalPrice * 0.5;
+      if (booking.paidAmount < depositThreshold3) {
         booking.depositPaid = false;
+        if (booking.bookingStatus === "confirmed") booking.bookingStatus = "pending";
+      }
     }
 
     await booking.save();

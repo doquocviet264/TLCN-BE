@@ -157,8 +157,12 @@ export const sepayWebhook = async (req, res) => {
       at: new Date(),
     });
 
-    if (!booking.depositPaid && amount > 0) booking.depositPaid = true;
-    if (booking.paidAmount >= booking.totalPrice) booking.bookingStatus = "c";
+    const depositThreshold = booking.totalPrice * 0.5;
+    if (!booking.depositPaid && booking.paidAmount >= depositThreshold) {
+      booking.depositPaid = true;
+      if (booking.bookingStatus === "pending") booking.bookingStatus = "confirmed";
+    }
+    if (booking.paidAmount >= booking.totalPrice) booking.bookingStatus = "completed";
 
     await booking.save();
 

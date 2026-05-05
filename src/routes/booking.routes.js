@@ -30,14 +30,14 @@ const router = Router();
  *         address:       { type: string, example: "Hà Nội" }
  *         numAdults:     { type: integer, example: 2 }
  *         numChildren:   { type: integer, example: 1 }
+ *         priceAdultSnapshot: { type: number, example: 500 }
+ *         priceChildSnapshot: { type: number, example: 299.97 }
  *         totalPrice:    { type: number, example: 799.97 }
  *         bookingStatus:
  *           type: string
- *           enum: [p, c, x]
- *           description: p=pending(gom khách), c=confirmed, x=canceled
+ *           enum: [pending, confirmed, completed, cancelled]
+ *           description: pending, confirmed, completed, cancelled
  *         code:          { type: string, example: "BKABC123" }
- *         depositRate:   { type: number, example: 0.2 }
- *         depositAmount: { type: number, example: 160 }
  *         paidAmount:    { type: number, example: 160 }
  *         depositPaid:   { type: boolean, example: true }
  *         paymentMethod: { type: string, example: "momo" }
@@ -200,7 +200,7 @@ router.get("/:code", auth, getMyBookingDetail);
  * /api/bookings/{code}/cancel:
  *   put:
  *     tags: [Bookings]
- *     summary: Hủy booking khi còn trạng thái pending (p)
+ *     summary: Hủy booking khi còn trạng thái pending
  *     security:
  *       - bearerAuth: []
  *     parameters:

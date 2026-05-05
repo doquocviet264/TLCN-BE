@@ -13,6 +13,7 @@ import {
   refundBookingPayment,
   getPaymentStats,
   getPaymentHistory,
+  adminCreateBooking,
 } from "../controllers/booking.controller.js";
 
 const router = Router();
@@ -57,7 +58,7 @@ const validateObjectId = (req, res, next) => {
  *         name: status
  *         schema:
  *           type: string
- *           enum: [p, c, x]
+ *           enum: [pending, confirmed, completed, cancelled]
  *       - in: query
  *         name: tourId
  *         schema:
@@ -71,6 +72,39 @@ const validateObjectId = (req, res, next) => {
  *         description: OK
  */
 router.get("/", auth, adminOnly, getAdminBookings);
+
+/**
+ * @openapi
+ * /api/admin/bookings:
+ *   post:
+ *     tags: [Admin Bookings]
+ *     summary: Tạo booking mới bởi Admin (có thể cho khách vãng lai không cần user account)
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [tourDepartureId, fullName, phoneNumber, numAdults, numChildren]
+ *             properties:
+ *               tourDepartureId: { type: string }
+ *               userId: { type: string, description: "Optional, để trống nếu là khách vãng lai" }
+ *               fullName: { type: string }
+ *               email: { type: string }
+ *               phoneNumber: { type: string }
+ *               address: { type: string }
+ *               note: { type: string }
+ *               numAdults: { type: integer, example: 1 }
+ *               numChildren: { type: integer, example: 0 }
+ *               paymentMethod: { type: string, example: "manual" }
+ *               paidAmount: { type: number, example: 0 }
+ *     responses:
+ *       201:
+ *         description: Created
+ */
+router.post("/", auth, adminOnly, adminCreateBooking);
 
 /**
  * @openapi
@@ -219,7 +253,7 @@ router.get("/:id", auth, adminOnly, validateObjectId, getAdminBookingById);
  *             properties:
  *               status:
  *                 type: string
- *                 enum: [p, c, x]
+ *                 enum: [pending, confirmed, completed, cancelled]
  *     responses:
  *       200:
  *         description: OK

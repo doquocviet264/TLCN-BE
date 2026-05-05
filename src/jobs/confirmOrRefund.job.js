@@ -1,12 +1,12 @@
 import cron from "node-cron";
-import { Tour } from "../models/Tour.js";
+import { TourDeparture } from "../models/TourDeparture.js";
 import { Booking } from "../models/Booking.js";
 import { sendMail } from "../services/mailer.js";
 
 /**
  * 09:00 hằng ngày:
- * - Nếu tour ngày mai đủ khách: nhắc khách thanh toán phần còn lại
- * - Nếu chưa đủ: gửi thông báo lựa chọn (hoàn cọc/chuyển tour)
+ * - Với các departure ngày mai có đủ khách: nhắc khách confirmed thanh toán phần còn lại
+ * - Với departure chưa đủ khách: gửi thông báo lựa chọn (hoàn cọc/chuyển tour)
  */
 export function registerConfirmOrRefundJob() {
   cron.schedule("0 9 * * *", async () => {
@@ -17,40 +17,36 @@ export function registerConfirmOrRefundJob() {
     const start = new Date(target); start.setHours(0,0,0,0);
     const end   = new Date(target); end.setHours(23,59,59,999);
 
-    const tours = await Tour.find({ startDate: { $gte: start, $lte: end } });
+    const departures = await TourDeparture.find({ startDate: { $gte: start, $lte: end } });
 
-    for (const tour of tours) {
-      const bookings = await Booking.find({ tourId: tour._id, bookingStatus: { $in: ["p","c"] } });
+    for (const departure of departures) {
+      const bookings = await Booking.find({
+        tourDepartureId: departure._id,
+        bookingStatus: { $in: ["pending", "confirmed"] }
+      });
 
-      if (tour.current_guests >= tour.min_guests) {
-        if (tour.status !== "confirmed") {
-          tour.status = "confirmed";
-          await tour.save();
-        }
-        // nhắc thanh toán phần còn lại
+      if ((departure.current_guests || 0) >= (departure.min_guests || 0)) {
+        // Đủ khách: nhắc thanh toán phần còn lại
         for (const bk of bookings) {
-          if (bk.depositPaid && bk.bookingStatus === "p") {
+          if (bk.depositPaid && bk.bookingStatus === "confirmed") {
             const rest = Math.max((bk.totalPrice || 0) - (bk.paidAmount || 0), 0);
-            if (bk.email) {
+            if (rest > 0 && bk.email) {
               await sendMail({
                 to: bk.email,
                 subject: "Tour xác nhận khởi hành — thanh toán phần còn lại",
-                html: `<p>Đơn <b>${bk.code}</b> đã đủ khách. Vui lòng thanh toán số tiền còn lại: <b>${rest}</b>.</p>`
+                html: `<p>Đơn <b>${bk.code}</b> đã đủ khách. Vui lòng thanh toán số tiền còn lại: <b>${rest.toLocaleString("vi-VN")} VNĐ</b>.</p>`
               });
             }
-            // (tuỳ chính sách) chuyển 'p' -> 'c' khi đã xác nhận chạy
-            await Booking.updateOne({ _id: bk._id }, { $set: { bookingStatus: "c" } });
           }
         }
       } else {
-        // chưa đủ khách
+        // Chưa đủ khách: thông báo
         for (const bk of bookings) {
-          if (bk.depositPaid && bk.bookingStatus === "p" && bk.email) {
+          if (bk.depositPaid && bk.email) {
             await sendMail({
               to: bk.email,
               subject: "Tour chưa đủ khách",
-              html: `<p>Đơn <b>${bk.code}</b> hiện tour chưa đủ khách.
-              Bạn có thể chọn <b>Hoàn tiền cọc</b> hoặc <b>Chuyển sang tour khác</b> (ưu đãi thêm).</p>`
+              html: `<p>Đơn <b>${bk.code}</b> hiện tour chưa đủ khách. Bạn có thể chọn <b>Hoàn tiền cọc</b> hoặc <b>Chuyển sang tour khác</b> (ưu đãi thêm).</p>`
             });
           }
         }

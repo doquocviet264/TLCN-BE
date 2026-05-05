@@ -8,9 +8,9 @@ import { VNPay, ignoreLogger, ProductCode, VnpLocale, dateFormat } from "vnpay";
  *  1. Khởi tạo instance VNPay
  * ========================= */
 const vnpay = new VNPay({
-  tmnCode: process.env.VNP_TMN_CODE,            // từ .env
-  secureSecret: process.env.VNP_HASH_SECRET,    // từ .env
-  vnpayHost: process.env.VNP_HOST || "https://sandbox.vnpayment.vn",
+  tmnCode: process.env.VNP_TMNCODE,            // từ .env
+  secureSecret: process.env.VNP_HASHSECRET,    // từ .env
+  vnpayHost: process.env.VNP_URL || "https://sandbox.vnpayment.vn",
   testMode: process.env.NODE_ENV !== "production",
   hashAlgorithm: process.env.VNP_HASH_ALGO || "SHA512",
   loggerFn: ignoreLogger,
@@ -29,13 +29,15 @@ function getClientIp(req) {
   );
 }
 
-/** Helper: chọn số tiền cần thanh toán (đặt cọc hay full) */
+/** Helper: chọn số tiền cần thanh toán (cố định 50% hoặc full) */
 function getBookingPayAmount(booking, payFull = false) {
-  if (payFull || booking.requireFullPayment) {
-    return Number(booking.totalPrice || 0);
-  }
-  // thanh toán tiền cọc
-  return Number(booking.depositAmount || 0);
+  if (payFull) return Number(booking.totalPrice || 0);
+  const paid = booking.paidAmount || 0;
+  const remaining = Math.max(0, booking.totalPrice - paid);
+  // Yêu cầu thêm số tiền để đạt ngưỡng 50%
+  const depositThreshold = booking.totalPrice * 0.5;
+  const toDeposit = Math.max(0, depositThreshold - paid);
+  return toDeposit > 0 ? toDeposit : remaining;
 }
 
 /* =====================================================
@@ -56,14 +58,14 @@ export const createVNPayPayment = async (req, res) => {
     }
 
     // Chỉ cho phép thanh toán booking của chính user
-    const booking = await Booking.findOne({ code, userId }).populate(
-      "tourId",
-      "title destination"
-    );
+    const booking = await Booking.findOne({ code, userId }).populate({
+      path: "tourDepartureId",
+      populate: { path: "tourId", select: "title destination" },
+    });
     if (!booking) {
       return res.status(404).json({ message: "Booking not found" });
     }
-    if (booking.bookingStatus === "c") {
+    if (booking.bookingStatus === "completed") {
       return res.status(400).json({ message: "Booking already completed" });
     }
 
@@ -172,35 +174,41 @@ export const vnpayReturn = async (req, res) => {
     const isFirstDeposit = !wasDeposited && amountPaid > 0;
 
     booking.paidAmount = (booking.paidAmount || 0) + amountPaid;
-    if (isFirstDeposit) booking.depositPaid = true;
 
+    // Logic: cọc ≥50% → confirmed, đủ 100% → completed
+    const depositThreshold = booking.totalPrice * 0.5;
+    if (!booking.depositPaid && booking.paidAmount >= depositThreshold) {
+      booking.depositPaid = true;
+      if (booking.bookingStatus === "pending") booking.bookingStatus = "confirmed";
+    }
     if (booking.paidAmount >= booking.totalPrice) {
-      booking.bookingStatus = "c"; // completed
+      booking.bookingStatus = "completed";
     }
     await booking.save();
 
     // Nếu là lần cọc đầu tiên, cập nhật current_guests + trạng thái tour
     if (isFirstDeposit) {
-      const guestsToAdd =
-        (booking.numAdults || 0) + (booking.numChildren || 0);
+      const guestsToAdd = (booking.numAdults || 0) + (booking.numChildren || 0);
 
-      if (mongoose.isValidObjectId(booking.tourId)) {
-        const tour = await Tour.findById(booking.tourId);
-        if (tour) {
-          const before = tour.current_guests || 0;
+      const depId = booking.tourDepartureId?._id || booking.tourDepartureId;
+      if (mongoose.isValidObjectId(depId)) {
+        const TourDepartureModel = mongoose.model("TourDeparture");
+        const tourDep = await TourDepartureModel.findById(depId);
+        if (tourDep) {
+          const before = tourDep.current_guests || 0;
           const after = before + guestsToAdd;
 
-          tour.current_guests = after;
+          tourDep.current_guests = after;
 
           // nếu đã đủ min_guests thì xác nhận tour
           if (
-            (tour.min_guests || 0) > 0 &&
-            after >= (tour.min_guests || 0) &&
-            tour.status !== "confirmed"
+            (tourDep.min_guests || 0) > 0 &&
+            after >= (tourDep.min_guests || 0) &&
+            tourDep.status === "pending"
           ) {
-            tour.status = "confirmed";
+            tourDep.status = "confirmed";
           }
-          await tour.save();
+          await tourDep.save();
         }
       }
     }
@@ -265,10 +273,14 @@ export const vnpayIpn = async (req, res) => {
     const isFirstDeposit = !wasDeposited && amountPaid > 0;
 
     booking.paidAmount = (booking.paidAmount || 0) + amountPaid;
-    if (isFirstDeposit) booking.depositPaid = true;
 
+    const depositThresholdIpn = booking.totalPrice * 0.5;
+    if (!booking.depositPaid && booking.paidAmount >= depositThresholdIpn) {
+      booking.depositPaid = true;
+      if (booking.bookingStatus === "pending") booking.bookingStatus = "confirmed";
+    }
     if (booking.paidAmount >= booking.totalPrice) {
-      booking.bookingStatus = "c";
+      booking.bookingStatus = "completed";
     }
     await booking.save();
 

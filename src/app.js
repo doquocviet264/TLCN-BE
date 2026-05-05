@@ -20,7 +20,8 @@ import { swaggerSpec } from "./config/swagger.js";
 import blogRouter from "./routes/blog.routes.js";
 import checkinRoutes from "./routes/checkin.routes.js";
 import wardRoutes from "./routes/ward.routes.js";
-import recommendationRoutes from "./routes/recommendations.routes.js"; // ← MỚI
+import recommendationRoutes from "./routes/recommendations.routes.js";
+import voucherRoutes from "./routes/voucher.routes.js";
 
 import { registerConfirmOrRefundJob } from "./jobs/confirmOrRefund.job.js";
 
@@ -101,7 +102,8 @@ app.use("/api/chat", chatRoutes);
 app.use("/api/blog", blogRouter);
 app.use("/api/checkins", checkinRoutes);
 app.use("/api/wards", wardRoutes);
-app.use("/api/recommendations", recommendationRoutes); // ← MỚI
+app.use("/api/recommendations", recommendationRoutes);
+app.use("/api/vouchers", voucherRoutes);
 
 /* =========================
  *  404 FALLBACK
