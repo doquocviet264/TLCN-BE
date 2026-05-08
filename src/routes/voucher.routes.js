@@ -42,7 +42,9 @@ const router = Router();
  *       400:
  *         description: Voucher không hợp lệ
  */
-router.post("/apply", applyVoucher); // Không yêu cầu auth nếu cho phép walk-in apply, tùy logic
+router.post("/apply", applyVoucher); 
+router.post("/validate", applyVoucher); 
+router.get("/me", auth, getMyVouchers);
 
 // Admin routes
 /**

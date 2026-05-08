@@ -4,6 +4,7 @@ import {
   createReview,
   getReviewsOfTour,
   myReviews,
+  deleteReview,
   getAdminReviews,
   deleteAdminReview,
   updateAdminReview,
@@ -74,6 +75,7 @@ router.get("/tour/:tourId", getReviewsOfTour);
  *         description: OK
  */
 router.get("/me", auth, myReviews);
+router.delete("/:id", auth, deleteReview);
 
 // ==================== ADMIN ROUTES ====================
 

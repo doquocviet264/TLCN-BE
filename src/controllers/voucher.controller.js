@@ -100,61 +100,90 @@ export const deleteVoucher = async (req, res) => {
   }
 };
 
-// 6. Áp dụng Voucher (User checkout)
-export const applyVoucher = async (req, res) => {
+// 8. Lấy voucher của tôi (User)
+export const getMyVouchers = async (req, res) => {
   try {
-    const { code, totalPrice, tourId } = req.body;
-    
-    if (!code) return res.status(400).json({ message: "Vui lòng nhập mã voucher" });
-    
-    const voucher = await Voucher.findOne({ code: code.toUpperCase() });
-    
-    if (!voucher) return res.status(404).json({ message: "Mã voucher không tồn tại" });
-    if (voucher.status !== "active") return res.status(400).json({ message: "Voucher đã ngừng hoạt động" });
-    
-    const now = new Date();
-    if (now < voucher.validFrom) return res.status(400).json({ message: "Voucher chưa tới thời gian áp dụng" });
-    if (now > voucher.validUntil) return res.status(400).json({ message: "Voucher đã hết hạn" });
-    
-    if (voucher.usageLimit !== null && voucher.usedCount >= voucher.usageLimit) {
-      return res.status(400).json({ message: "Voucher đã hết lượt sử dụng" });
-    }
-    
-    if (totalPrice < voucher.minOrderValue) {
-      return res.status(400).json({ message: `Đơn hàng tối thiểu để áp dụng là ${voucher.minOrderValue.toLocaleString()} VNĐ` });
-    }
-    
-    // Nếu voucher có mảng applicableTours, check xem tourId có nằm trong đó không
-    if (voucher.applicableTours && voucher.applicableTours.length > 0) {
-      if (!tourId || !voucher.applicableTours.some(t => t.toString() === tourId.toString())) {
-        return res.status(400).json({ message: "Voucher không áp dụng cho tour này" });
-      }
-    }
-    
-    // Tính tiền giảm
-    let discount = 0;
-    if (voucher.discountType === "percent") {
-      discount = (totalPrice * voucher.discountValue) / 100;
-      if (voucher.maxDiscount && discount > voucher.maxDiscount) {
-        discount = voucher.maxDiscount;
-      }
-    } else {
-      discount = voucher.discountValue;
-    }
-    
-    // Không cho phép giảm quá tổng tiền
-    if (discount > totalPrice) discount = totalPrice;
+    const userId = req.user?.id;
+    // Lấy voucher được gán cho user HOẶC voucher công khai (userId = null)
+    const vouchers = await Voucher.find({
+      $or: [{ userId }, { userId: null }],
+      status: "active",
+      validUntil: { $gte: new Date() }
+    }).sort({ createdAt: -1 });
 
-    res.json({
-      message: "Áp dụng voucher thành công",
-      discountAmount: discount,
-      voucher: {
-        _id: voucher._id,
-        code: voucher.code,
-        name: voucher.name,
-      }
-    });
+    res.json({ data: vouchers });
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
 };
+
+
+// 6. Nội bộ: Kiểm tra và tính toán Voucher
+export const validateVoucherInternal = async (code, totalPrice, tourId) => {
+  if (!code) throw new Error("Vui lòng nhập mã voucher");
+  
+  const voucher = await Voucher.findOne({ code: code.toUpperCase() });
+  
+  if (!voucher) throw new Error("Mã voucher không tồn tại");
+  if (voucher.status !== "active") throw new Error("Voucher đã ngừng hoạt động");
+  
+  const now = new Date();
+  if (now < voucher.validFrom) throw new Error("Voucher chưa tới thời gian áp dụng");
+  if (now > voucher.validUntil) throw new Error("Voucher đã hết hạn");
+  
+  if (voucher.usageLimit !== null && voucher.usedCount >= voucher.usageLimit) {
+    throw new Error("Voucher đã hết lượt sử dụng");
+  }
+  
+  if (totalPrice < voucher.minOrderValue) {
+    throw new Error(`Đơn hàng tối thiểu để áp dụng là ${voucher.minOrderValue.toLocaleString()} VNĐ`);
+  }
+  
+  // Nếu voucher có mảng applicableTours, check xem tourId có nằm trong đó không
+  // tourId ở đây là tourTemplateId (từ departure.tourId)
+  if (voucher.applicableTours && voucher.applicableTours.length > 0) {
+    if (!tourId || !voucher.applicableTours.some(t => t.toString() === tourId.toString())) {
+      throw new Error("Voucher không áp dụng cho tour này");
+    }
+  }
+  
+  // Tính tiền giảm
+  let discount = 0;
+  if (voucher.discountType === "percent") {
+    discount = (totalPrice * voucher.discountValue) / 100;
+    if (voucher.maxDiscount && discount > voucher.maxDiscount) {
+      discount = voucher.maxDiscount;
+    }
+  } else {
+    discount = voucher.discountValue;
+  }
+  
+  // Không cho phép giảm quá tổng tiền
+  if (discount > totalPrice) discount = totalPrice;
+
+  return {
+    voucher,
+    discountAmount: Math.round(discount)
+  };
+};
+
+// 7. Áp dụng Voucher (User checkout API)
+export const applyVoucher = async (req, res) => {
+  try {
+    const { code, totalPrice, tourId } = req.body;
+    const result = await validateVoucherInternal(code, totalPrice, tourId);
+    
+    res.json({
+      message: "Áp dụng voucher thành công",
+      discountAmount: result.discountAmount,
+      voucher: {
+        _id: result.voucher._id,
+        code: result.voucher.code,
+        name: result.voucher.name,
+      }
+    });
+  } catch (err) {
+    res.status(400).json({ message: err.message });
+  }
+};
+

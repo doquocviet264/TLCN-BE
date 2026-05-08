@@ -3,6 +3,58 @@ import mongoose from "mongoose";
 import { BlogPost } from "../models/BlogPost.js";
 import { BlogComment } from "../models/BlogComment.js";
 import cloudinary from "../config/cloudinary.js";
+import { Tour } from "../models/Tour.js";
+
+// GET /api/blog/related-to-tour/:tourId
+// Tìm blog liên quan tới tour dựa trên destination + title (text search)
+export const getRelatedBlogsForTour = async (req, res) => {
+  try {
+    const { tourId } = req.params;
+    if (!mongoose.isValidObjectId(tourId)) {
+      return res.status(400).json({ message: "Tour ID không hợp lệ" });
+    }
+
+    const tour = await Tour.findById(tourId).select("title destination").lean();
+    if (!tour) {
+      return res.status(404).json({ message: "Không tìm thấy tour" });
+    }
+
+    // Tạo danh sách từ khóa từ destination và title
+    const keywords = [
+      tour.destination,
+      ...(tour.title || "").split(/[\s,·\-–]+/)
+    ]
+      .filter(Boolean)
+      .map(w => w.trim())
+      .filter(w => w.length >= 2); // loại từ quá ngắn
+
+    if (keywords.length === 0) {
+      return res.json({ data: [] });
+    }
+
+    // Tìm blog published + public, match bất kỳ keyword nào trong title/summary/tags/province
+    const regexPatterns = keywords.slice(0, 5).map(k => new RegExp(k, "i"));
+
+    const blogs = await BlogPost.find({
+      status: "published",
+      privacy: "public",
+      $or: regexPatterns.flatMap(regex => [
+        { title: regex },
+        { summary: regex },
+        { tags: regex },
+        { province: regex },
+      ]),
+    })
+      .sort({ publishedAt: -1 })
+      .limit(2)
+      .select("slug title summary coverImageUrl createdAt")
+      .lean();
+
+    res.json({ data: blogs });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+};
 
 /** Helper: tính lại ratingAvg & ratingCount */
 async function recalcGlobalRating(blogId) {

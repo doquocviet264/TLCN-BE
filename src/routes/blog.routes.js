@@ -5,6 +5,7 @@ import { uploadBlogMem } from "../middleware/upload.js";
 import {
   listPublicPosts,
   getPostBySlug,
+  getRelatedBlogsForTour,
   listAllPostsAdmin,
   getPostByIdAdmin,
   createPost,
@@ -125,6 +126,24 @@ const router = Router();
  *         description: OK
  */
 router.get("/", optionalAuth, listPublicPosts);
+
+/**
+ * @openapi
+ * /api/blog/related-to-tour/{tourId}:
+ *   get:
+ *     tags: [Blog]
+ *     summary: Lấy 1-2 blog liên quan đến tour (tự động tìm theo keyword)
+ *     parameters:
+ *       - in: path
+ *         name: tourId
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: OK
+ */
+router.get("/related-to-tour/:tourId", getRelatedBlogsForTour);
 
 /**
  * @openapi

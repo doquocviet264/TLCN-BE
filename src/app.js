@@ -22,6 +22,7 @@ import checkinRoutes from "./routes/checkin.routes.js";
 import wardRoutes from "./routes/ward.routes.js";
 import recommendationRoutes from "./routes/recommendations.routes.js";
 import voucherRoutes from "./routes/voucher.routes.js";
+import favoriteRoutes from "./routes/favorite.routes.js";
 
 import { registerConfirmOrRefundJob } from "./jobs/confirmOrRefund.job.js";
 
@@ -98,12 +99,13 @@ app.use("/api/payment", paymentRoutes);
 app.use("/api/leader", leaderAuthRoutes);
 app.use("/api/leader", leaderRoutes);
 app.use("/api/reviews", reviewRoutes);
-app.use("/api/chat", chatRoutes);
 app.use("/api/blog", blogRouter);
-app.use("/api/checkins", checkinRoutes);
-app.use("/api/wards", wardRoutes);
+app.use("/api/chat", chatRoutes);
+app.use("/api/checkin", checkinRoutes);
+app.use("/api/ward", wardRoutes);
 app.use("/api/recommendations", recommendationRoutes);
 app.use("/api/vouchers", voucherRoutes);
+app.use("/api/favorites", favoriteRoutes);
 
 /* =========================
  *  404 FALLBACK

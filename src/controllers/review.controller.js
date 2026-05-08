@@ -9,43 +9,42 @@ export const createReview = async (req, res) => {
     const { tourId, rating, comment } = req.body;
 
     if (!mongoose.isValidObjectId(tourId)) {
-      return res.status(400).json({ message: "Invalid tourId" });
+      return res.status(400).json({ message: "ID tour không hợp lệ" });
     }
     if (!rating || rating < 1 || rating > 5) {
-      return res.status(400).json({ message: "Rating must be 1-5" });
+      return res.status(400).json({ message: "Đánh giá phải từ 1-5 sao" });
     }
 
     const tour = await Tour.findById(tourId);
-    if (!tour) return res.status(404).json({ message: "Tour not found" });
+    if (!tour) return res.status(404).json({ message: "Không tìm thấy tour" });
 
-    // Kiểm tra đã đi tour chưa
-    const now = new Date();
+    // Kiểm tra đã đi tour chưa (Tìm booking của user có tourId tương ứng qua TourDeparture)
     const booked = await Booking.findOne({
-      tourId,
       userId: req.user.id,
-      bookingStatus: "c",         // bạn dùng 'c' = completed
+      bookingStatus: "completed",
+    }).populate({
+      path: "tourDepartureId",
+      match: { tourId: new mongoose.Types.ObjectId(tourId) }
     });
 
-    if (!booked) {
-      return res.status(403).json({ message: "You can only review tours you have completed" });
+    // Mongoose populate with match will return null for tourDepartureId if no match
+    if (!booked || !booked.tourDepartureId) {
+      return res.status(403).json({ message: "Bạn chỉ có thể đánh giá tour đã hoàn thành" });
     }
 
-    if (tour.endDate && tour.endDate > now) {
-      return res.status(400).json({ message: "You can review after tour ends" });
-    }
-
-    // Tạo hoặc update nếu lỡ tồn tại
+    // Tạo hoặc update review
     const review = await Review.findOneAndUpdate(
       { tourId, userId: req.user.id },
       { rating, comment: comment || "" },
       { upsert: true, new: true, setDefaultsOnInsert: true }
     );
 
-    res.status(201).json({ message: "Review saved", review });
+    res.status(201).json({ message: "Đã lưu đánh giá", review });
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
 };
+
 
 // GET /api/reviews/tour/:tourId
 export const getReviewsOfTour = async (req, res) => {
@@ -202,3 +201,27 @@ export const updateAdminReview = async (req, res) => {
     res.status(500).json({ message: err.message });
   }
 };
+
+// 8. User Xóa Review của chính mình
+export const deleteReview = async (req, res) => {
+  try {
+    const { id } = req.params;
+    if (!mongoose.isValidObjectId(id)) {
+      return res.status(400).json({ message: "ID đánh giá không hợp lệ" });
+    }
+
+    const review = await Review.findOneAndDelete({
+      _id: id,
+      userId: req.user.id,
+    });
+
+    if (!review) {
+      return res.status(404).json({ message: "Không tìm thấy đánh giá hoặc bạn không có quyền xóa" });
+    }
+
+    res.json({ message: "Đã xóa đánh giá thành công" });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+};
+

@@ -2,6 +2,8 @@ import mongoose from "mongoose";
 import { Tour } from "../models/Tour.js";
 import { TourDeparture } from "../models/TourDeparture.js";
 import { Booking } from "../models/Booking.js";
+import { Voucher } from "../models/Voucher.js";
+import { validateVoucherInternal } from "./voucher.controller.js";
 import { sendMail } from "../services/mailer.js";
 import { notifyTourConfirmed } from "../services/notify.js";
 import {
@@ -80,7 +82,29 @@ export const createBooking = async (req, res) => {
     // Tính toán giá tiền (Ưu tiên giá override ở Departure)
     const priceAdult = departure.priceAdult ?? tour.priceAdult ?? 0;
     const priceChild = departure.priceChild ?? tour.priceChild ?? Math.round(priceAdult * 0.6);
-    const totalPrice = Number(numAdults) * priceAdult + Number(numChildren) * priceChild;
+    let totalPrice = Number(numAdults) * priceAdult + Number(numChildren) * priceChild;
+
+    // Xử lý Voucher (nếu có)
+    let voucherCode = null;
+    let discountAmount = 0;
+    if (req.body.couponCode) {
+      try {
+        const vResult = await validateVoucherInternal(req.body.couponCode, totalPrice, tour._id);
+        voucherCode = vResult.voucher.code;
+        discountAmount = vResult.discountAmount;
+        totalPrice = Math.max(0, totalPrice - discountAmount);
+        
+        // Tăng số lượt sử dụng voucher
+        await Voucher.updateOne(
+          { _id: vResult.voucher._id },
+          { $inc: { usedCount: 1 } },
+          { session }
+        );
+      } catch (vErr) {
+        // Nếu voucher lỗi, trả về lỗi ngay không cho đặt chỗ
+        return res.status(400).json({ message: vErr.message });
+      }
+    }
 
     const code = "BK" + Math.random().toString(36).slice(2, 8).toUpperCase();
 
@@ -101,6 +125,8 @@ export const createBooking = async (req, res) => {
           priceAdultSnapshot: priceAdult,
           priceChildSnapshot: priceChild,
           totalPrice,
+          voucherCode,
+          discountAmount,
           bookingStatus: "pending",
           paymentMethod: "momo",
           paidAmount: 0,
@@ -227,9 +253,28 @@ export const onPaymentReceived = async (req, res) => {
 export const myBookings = async (req, res) => {
   const page = Math.max(parseInt(req.query.page || "1", 10), 1);
   const limit = Math.min(parseInt(req.query.limit || "10", 10), 50);
+  const { status, search } = req.query;
+
+  const query = { userId: req.user.id };
+
+  // Filter by status
+  if (status && status !== "all") {
+    query.bookingStatus = status;
+  }
+
+  // Search by code or title
+  if (search && search.trim()) {
+    const searchRegex = new RegExp(search.trim(), "i");
+    query.$or = [
+      { code: searchRegex },
+      { fullName: searchRegex },
+      // Note: searching by tour title would require a more complex lookup if not populated yet
+      // but we can search in populated fields if we use aggregate or separate query
+    ];
+  }
 
   let [rows, total] = await Promise.all([
-    Booking.find({ userId: req.user.id })
+    Booking.find(query)
       .populate({
         path: "tourDepartureId",
         populate: {
@@ -241,7 +286,7 @@ export const myBookings = async (req, res) => {
       .skip((page - 1) * limit)
       .limit(limit)
       .lean(),
-    Booking.countDocuments({ userId: req.user.id }),
+    Booking.countDocuments(query),
   ]);
 
   rows = rows.map((b) => {
@@ -558,7 +603,27 @@ export const adminCreateBooking = async (req, res) => {
     const tour = departure.tourId;
     const priceAdult = departure.priceAdult ?? tour.priceAdult ?? 0;
     const priceChild = departure.priceChild ?? tour.priceChild ?? Math.round(priceAdult * 0.6);
-    const totalPrice = Number(numAdults) * priceAdult + Number(numChildren) * priceChild;
+    let totalPrice = Number(numAdults) * priceAdult + Number(numChildren) * priceChild;
+
+    // Xử lý Voucher (Admin create cũng có thể áp mã)
+    let voucherCodeSnapshot = null;
+    let discountAmountSnapshot = 0;
+    if (req.body.couponCode) {
+      try {
+        const vResult = await validateVoucherInternal(req.body.couponCode, totalPrice, tour._id);
+        voucherCodeSnapshot = vResult.voucher.code;
+        discountAmountSnapshot = vResult.discountAmount;
+        totalPrice = Math.max(0, totalPrice - discountAmountSnapshot);
+        
+        await Voucher.updateOne(
+          { _id: vResult.voucher._id },
+          { $inc: { usedCount: 1 } },
+          { session }
+        );
+      } catch (vErr) {
+        return res.status(400).json({ message: `Lỗi voucher: ${vErr.message}` });
+      }
+    }
 
     const code = "BK" + Math.random().toString(36).slice(2, 8).toUpperCase();
 
@@ -601,6 +666,8 @@ export const adminCreateBooking = async (req, res) => {
           priceAdultSnapshot: priceAdult,
           priceChildSnapshot: priceChild,
           totalPrice,
+          voucherCode: voucherCodeSnapshot,
+          discountAmount: discountAmountSnapshot,
           bookingStatus,
           paymentMethod,
           paidAmount: Number(paidAmount),
