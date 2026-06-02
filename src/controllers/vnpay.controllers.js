@@ -6,7 +6,7 @@ import { vnpConfig } from "../config/vnpay.js";
 import { buildVNPayPayUrl } from "../utils/vnpay.js";
 
 /**
- * Xử lý tạo URL thanh toán VNPAY
+ * Xử lý tạo URL thanh toán VNPAY (Legacy/Alternative Controller)
  */
 export const vnpCreate = async (req, res) => {
   try {
@@ -81,7 +81,7 @@ export const vnpCreate = async (req, res) => {
         "127.0.0.1",
       returnUrl: vnpConfig.returnUrl || process.env.VNP_RETURN_URL,
       locale: "vn",
-      currCode: "VND",
+      orderType: "other"
     });
 
     // 6. Lưu thông tin giao dịch vào Booking (tùy chọn)

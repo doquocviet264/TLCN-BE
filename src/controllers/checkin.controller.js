@@ -1,44 +1,83 @@
 import { Checkin } from "../models/Checkin.js";
 import { Booking } from "../models/Booking.js";
+import { ProvinceProgress } from "../models/ProvinceProgress.js";
+import { TravelMemory } from "../models/TravelMemory.js";
 
-// --- 1. LẤY DANH SÁCH TỈNH ĐÃ ĐI (Để tô màu bản đồ) ---
+const getJourneyData = async (userId) => {
+  // Đọc dữ liệu từ bản mới (ProvinceProgress) thay vì Checkin cũ
+  const progresses = await ProvinceProgress.find({ userId }).lean();
+
+  const fromBookings = [];
+  const fromManualCheckins = [];
+  const progressList = [];
+
+  for (const p of progresses) {
+    if (p.source === "tour" || p.source === "both") {
+      fromBookings.push(p.provinceName);
+    }
+    if (p.source === "manual" || p.source === "both") {
+      fromManualCheckins.push(p.provinceName);
+    }
+
+    // Đếm số kỷ niệm (có thể làm aggregation, nhưng MVP query trực tiếp tạm)
+    const memoryCount = await TravelMemory.countDocuments({
+      userId,
+      normalizedProvinceName: p.normalizedProvinceName,
+    });
+
+    progressList.push({
+      provinceName: p.provinceName,
+      source: p.source,
+      unlockedAt: p.unlockedAt,
+      memoryCount: memoryCount,
+      completedTourCount: p.completedTourIds?.length || 0,
+    });
+  }
+
+  // Fallback: Lấy chi tiết booking cũ để tương thích với API hiện tại
+  const bookingCheckins = await Booking.find({
+    userId,
+    bookingStatus: "completed",
+  })
+    .populate({
+      path: "tourDepartureId",
+      select: "tourId startDate endDate status",
+      populate: {
+        path: "tourId",
+        select: "title destination destinationSlug",
+      },
+    })
+    .select("code tourDepartureId bookingStatus createdAt")
+    .lean();
+
+  const bookingDetails = bookingCheckins
+    .map((booking) => {
+      const departure = booking.tourDepartureId;
+      const tour = departure?.tourId;
+      if (!["completed", "closed"].includes(departure?.status)) return null;
+      return {
+        bookingCode: booking.code,
+        provinceName: tour?.destination,
+        tourTitle: tour?.title,
+        destinationSlug: tour?.destinationSlug,
+        startDate: departure?.startDate,
+        endDate: departure?.endDate,
+      };
+    })
+    .filter((item) => item?.provinceName);
+
+  return { fromBookings, fromManualCheckins, bookingDetails, progress: progressList };
+};
+
 export const getUserJourney = async (req, res) => {
   try {
     const userId = req.user.id;
+    const { fromBookings, fromManualCheckins } = await getJourneyData(userId);
+    const provinces = [...new Set([...fromBookings, ...fromManualCheckins])];
 
-    // A. Lấy check-in thủ công (từ bảng Checkin)
-    const manualCheckins = await Checkin.find({ userId }).select(
-      "provinceName"
-    );
-
-    // B. Lấy check-in tự động (từ đơn hàng Booking đã hoàn thành)
-    const bookingCheckins = await Booking.find({
-      userId,
-      status: "completed",
-    }).populate({
-      path: "tourId",
-      select: "province", // Chỉ cần lấy trường tỉnh
-    });
-
-    // C. Gộp lại và loại bỏ trùng lặp (Dùng Set)
-    const visitedSet = new Set();
-
-    // Thêm từ manual
-    manualCheckins.forEach((c) => {
-      if (c.provinceName) visitedSet.add(c.provinceName);
-    });
-
-    // Thêm từ booking
-    bookingCheckins.forEach((b) => {
-      if (b.tourId?.province) {
-        visitedSet.add(b.tourId.province);
-      }
-    });
-
-    // Trả về mảng tên tỉnh ["Hà Nội", "Đà Nẵng",...]
     res.json({
-      total: visitedSet.size,
-      provinces: Array.from(visitedSet),
+      total: provinces.length,
+      provinces,
     });
   } catch (error) {
     console.error(error);
@@ -46,7 +85,25 @@ export const getUserJourney = async (req, res) => {
   }
 };
 
-// --- 2. TẠO CHECK-IN MỚI & SINH VOUCHER ---
+export const getFullJourney = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { fromBookings, fromManualCheckins, bookingDetails, progress } =
+      await getJourneyData(userId);
+
+    res.json({
+      fromBookings,
+      fromManualCheckins,
+      bookingDetails,
+      progress,
+      total: new Set([...fromBookings, ...fromManualCheckins]).size,
+    });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: "Lỗi lấy dữ liệu hành trình" });
+  }
+};
+
 export const createCheckin = async (req, res) => {
   try {
     const userId = req.user.id;
@@ -58,7 +115,6 @@ export const createCheckin = async (req, res) => {
         .json({ message: "Vui lòng cung cấp tên tỉnh thành" });
     }
 
-    // A. Kiểm tra trùng (1 người chỉ check-in 1 tỉnh 1 lần)
     const existingCheckin = await Checkin.findOne({ userId, provinceName });
     if (existingCheckin) {
       return res.status(400).json({
@@ -66,36 +122,34 @@ export const createCheckin = async (req, res) => {
       });
     }
 
-    // B. SINH MÃ VOUCHER TỰ ĐỘNG
-    // Logic: VN + 3 chữ cái đầu của tỉnh (viết hoa, bỏ dấu) + 4 số ngẫu nhiên
-    // VD: Hà Nội -> HAN -> VN-HAN-8392
+    const shouldIssueVoucher = type !== "manual_no_voucher";
+    const checkinType = type === "auto" ? "auto" : "manual";
+
     const shortName = provinceName
       .normalize("NFD")
-      .replace(/[\u0300-\u036f]/g, "") // Bỏ dấu tiếng Việt
-      .replace(/\s/g, "") // Bỏ khoảng trắng
+      .replace(/[\u0300-\u036f]/g, "")
+      .replace(/\s/g, "")
       .substring(0, 3)
       .toUpperCase();
 
     const randomNum = Math.floor(1000 + Math.random() * 9000);
-    const voucherCode = `VN-${shortName}-${randomNum}`;
+    const voucherCode = shouldIssueVoucher ? `VN-${shortName}-${randomNum}` : undefined;
 
-    // C. Lưu vào DB
     const newCheckin = new Checkin({
       userId,
       provinceName,
-      type,
+      type: checkinType,
       note,
-      voucherCode, // <--- Lưu mã này lại
+      voucherCode,
       isUsed: false,
     });
 
     await newCheckin.save();
 
-    // D. Trả về kết quả (Kèm voucherCode để Frontend hiện lên Popup)
     res.status(201).json({
       message: "Check-in thành công!",
       data: newCheckin,
-      voucherCode: voucherCode,
+      voucherCode,
     });
   } catch (error) {
     if (error.code === 11000) {
@@ -107,18 +161,16 @@ export const createCheckin = async (req, res) => {
   }
 };
 
-// --- 3. LẤY DANH SÁCH VOUCHER (Mới thêm) ---
 export const getMyVouchers = async (req, res) => {
   try {
     const userId = req.user.id;
 
-    // Tìm những check-in có mã voucher
     const vouchers = await Checkin.find({
       userId,
       voucherCode: { $exists: true, $ne: null },
     })
       .select("provinceName voucherCode createdAt isUsed")
-      .sort({ createdAt: -1 }); // Mới nhất lên đầu
+      .sort({ createdAt: -1 });
 
     res.json({ data: vouchers });
   } catch (error) {

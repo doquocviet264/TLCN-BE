@@ -3,6 +3,43 @@ import mongoose from "mongoose";
 import { TourDeparture } from "../models/TourDeparture.js";
 import { Expense }       from "../models/Expense.js";
 import { Booking }       from "../models/Booking.js";
+import { Leader }        from "../models/Leader.js";
+import { unlockProvinceForDeparture } from "../services/journey.service.js";
+
+const CANCELLED_BOOKING_STATUSES = ["cancelled", "x"];
+
+const toObjectIds = (ids = []) =>
+  ids
+    .filter((id) => mongoose.isValidObjectId(id))
+    .map((id) => new mongoose.Types.ObjectId(id));
+
+/* ========================================================
+ *  0. Thông tin Leader hiện tại
+ *  GET /api/leader/me
+ * ======================================================== */
+export const leaderGetMe = async (req, res) => {
+  try {
+    const leader = await Leader.findById(req.user.id)
+      .select("_id username fullName email phoneNumber address status createdAt")
+      .lean();
+
+    if (!leader) return res.status(404).json({ message: "Leader not found" });
+    if (leader.status !== "active") return res.status(403).json({ message: "Leader inactive" });
+
+    res.json({
+      id: String(leader._id),
+      username: leader.username,
+      fullName: leader.fullName,
+      email: leader.email,
+      phoneNumber: leader.phoneNumber,
+      address: leader.address,
+      status: leader.status,
+      createdAt: leader.createdAt,
+    });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+};
 
 /* ========================================================
  *  1. Danh sách Departure được phân công cho Leader
@@ -63,16 +100,83 @@ export const leaderGetPassengers = async (req, res) => {
       return res.status(400).json({ message: "Invalid departure ID" });
 
     // Kiểm tra leader có sở hữu departure này không
-    const dep = await TourDeparture.exists({ _id: id, leaderId: req.user.id });
+    const dep = await TourDeparture.findOne({ _id: id, leaderId: req.user.id }).select("passengerCheckins");
     if (!dep) return res.status(403).json({ message: "Forbidden (not your departure)" });
 
-    const bookings = await Booking.find({ tourDepartureId: id })
+    const bookings = await Booking.find({
+      tourDepartureId: id,
+      bookingStatus: { $nin: CANCELLED_BOOKING_STATUSES },
+    })
       .populate("userId", "fullName email phoneNumber avatar")
-      .select("code userId fullName email phoneNumber numAdults numChildren totalPrice bookingStatus paidAmount depositPaid createdAt")
+      .select("code userId fullName email phoneNumber numAdults numChildren totalPrice bookingStatus paidAmount depositPaid createdAt note")
       .sort({ createdAt: 1 })
       .lean();
 
-    res.json({ total: bookings.length, data: bookings });
+    // Map isPresent từ TourDeparture vào Booking
+    const checkinMap = new Map();
+    if (dep.passengerCheckins) {
+      for (const ci of dep.passengerCheckins) {
+        checkinMap.set(ci.bookingId.toString(), ci.isPresent);
+      }
+    }
+
+    const data = bookings.map(b => ({
+      ...b,
+      isPresent: checkinMap.get(b._id.toString()) || false
+    }));
+
+    res.json({ total: data.length, data });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+};
+
+/* ========================================================
+ *  3b. Điểm danh hành khách (Booking level)
+ *  PATCH /api/leader/departures/:id/bookings/:bookingId/checkin
+ * ======================================================== */
+export const leaderUpdateBookingCheckin = async (req, res) => {
+  try {
+    const { id, bookingId } = req.params;
+    const { isPresent } = req.body;
+
+    if (!mongoose.isValidObjectId(id) || !mongoose.isValidObjectId(bookingId)) {
+      return res.status(400).json({ message: "Invalid IDs" });
+    }
+
+    const dep = await TourDeparture.findOne({ _id: id, leaderId: req.user.id });
+    if (!dep) return res.status(404).json({ message: "Departure not found or not yours" });
+
+    const booking = await Booking.exists({
+      _id: bookingId,
+      tourDepartureId: id,
+      bookingStatus: { $nin: CANCELLED_BOOKING_STATUSES },
+    });
+    if (!booking) {
+      return res.status(404).json({ message: "Booking not found in this departure" });
+    }
+
+    dep.passengerCheckins = dep.passengerCheckins || [];
+
+    const existingCheckinIndex = dep.passengerCheckins.findIndex(
+      ci => ci.bookingId.toString() === bookingId
+    );
+
+    if (existingCheckinIndex > -1) {
+      dep.passengerCheckins[existingCheckinIndex].isPresent = isPresent;
+      dep.passengerCheckins[existingCheckinIndex].checkedAt = new Date();
+      dep.passengerCheckins[existingCheckinIndex].checkedBy = new mongoose.Types.ObjectId(req.user.id);
+    } else {
+      dep.passengerCheckins.push({
+        bookingId: new mongoose.Types.ObjectId(bookingId),
+        isPresent,
+        checkedAt: new Date(),
+        checkedBy: new mongoose.Types.ObjectId(req.user.id),
+      });
+    }
+
+    await dep.save();
+    res.json({ message: "Checkin updated", isPresent });
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
@@ -102,7 +206,8 @@ export const leaderAddTimeline = async (req, res) => {
           at: atDate,
           place:  place || "",
           note:   note  || "",
-          createdBy: new mongoose.Types.ObjectId(req.user.id)
+          createdBy: new mongoose.Types.ObjectId(req.user.id),
+          createdByRole: "leader"
         }
       }
     };
@@ -118,7 +223,16 @@ export const leaderAddTimeline = async (req, res) => {
     );
     if (!departure) return res.status(404).json({ message: "Departure not found or not assigned to you" });
 
-    res.json({ message: "Timeline updated", departure });
+    let completedBookings = null;
+    if (eventType === "finished") {
+      completedBookings = await Booking.updateMany(
+        { tourDepartureId: id, bookingStatus: "confirmed" },
+        { $set: { bookingStatus: "completed" } }
+      );
+      await unlockProvinceForDeparture(id);
+    }
+
+    res.json({ message: "Timeline updated", departure, completedBookings });
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
@@ -131,10 +245,14 @@ export const leaderAddTimeline = async (req, res) => {
 export const leaderCreateExpense = async (req, res) => {
   try {
     const { id } = req.params; // departureId
-    const { title, amount, note, visibleToCustomers = true } = req.body;
+    const { title, amount, note, visibleToCustomers = true, receiptImages = [] } = req.body;
 
     if (!title || !Number.isFinite(Number(amount)))
       return res.status(400).json({ message: "title & amount are required" });
+
+    const normalizedReceiptImages = Array.isArray(receiptImages)
+      ? receiptImages.filter((url) => typeof url === "string" && url.trim()).slice(0, 5)
+      : [];
 
     // Chỉ cho phép leader thêm chi phí trên departure của mình
     const dep = await TourDeparture.exists({ _id: id, leaderId: req.user.id });
@@ -146,7 +264,9 @@ export const leaderCreateExpense = async (req, res) => {
       amount:           Number(amount),
       occurredAt:       new Date(),
       note:             note || "",
+      receiptImages:    normalizedReceiptImages,
       visibleToCustomers: Boolean(visibleToCustomers),
+      status:           "pending",
       addedBy:          new mongoose.Types.ObjectId(req.user.id)
     });
 
@@ -199,7 +319,7 @@ export const leaderGetTourBookings = async (req, res) => {
 
     const bookings = await Booking.find({
       tourDepartureId: id,
-      bookingStatus: { $ne: "x" } // Loại trừ booking đã hủy
+      bookingStatus: { $nin: CANCELLED_BOOKING_STATUSES },
     })
       .populate("userId", "fullName email phoneNumber avatar")
       .select("code userId fullName email phoneNumber numAdults numChildren totalPrice bookingStatus paidAmount depositPaid createdAt")
@@ -228,6 +348,68 @@ export const leaderGetTourBookings = async (req, res) => {
       total: formattedBookings.length,
       data: formattedBookings
     });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+};
+
+/* ========================================================
+ *  8. Leader nộp báo cáo sau tour
+ *  PATCH /api/leader/departures/:id/report
+ * ======================================================== */
+export const leaderSubmitTourReport = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const {
+      summary = "",
+      incidents = "",
+      expenseNote = "",
+      noShowBookingIds = [],
+    } = req.body || {};
+
+    if (!mongoose.isValidObjectId(id)) {
+      return res.status(400).json({ message: "Invalid departure ID" });
+    }
+
+    if (!summary.trim()) {
+      return res.status(400).json({ message: "summary is required" });
+    }
+
+    const dep = await TourDeparture.findOne({ _id: id, leaderId: req.user.id })
+      .select("_id")
+      .lean();
+    if (!dep) return res.status(404).json({ message: "Departure not found or not assigned to you" });
+
+    const requestedNoShows = Array.isArray(noShowBookingIds)
+      ? toObjectIds(noShowBookingIds)
+      : [];
+
+    const validNoShows = requestedNoShows.length
+      ? await Booking.find({
+          _id: { $in: requestedNoShows },
+          tourDepartureId: id,
+          bookingStatus: { $nin: CANCELLED_BOOKING_STATUSES },
+        }).select("_id").lean()
+      : [];
+
+    const report = {
+      summary: summary.trim(),
+      incidents: incidents.trim(),
+      expenseNote: expenseNote.trim(),
+      noShowBookingIds: validNoShows.map((b) => b._id),
+      status: "submitted",
+      submittedAt: new Date(),
+      submittedBy: new mongoose.Types.ObjectId(req.user.id),
+      reviewNote: "",
+    };
+
+    const departure = await TourDeparture.findOneAndUpdate(
+      { _id: id, leaderId: req.user.id },
+      { $set: { leaderReport: report } },
+      { new: true }
+    ).populate("tourId", "title destination destinationSlug images itinerary includes excludes priceAdult priceChild");
+
+    res.json({ message: "Report submitted", report: departure.leaderReport, departure });
   } catch (err) {
     res.status(500).json({ message: err.message });
   }

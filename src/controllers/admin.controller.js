@@ -13,6 +13,7 @@ import { Booking } from "../models/Booking.js";
 import { Review } from "../models/Review.js";
 import { BlogPost } from "../models/BlogPost.js";
 import cloudinary from "../config/cloudinary.js";
+import { unlockProvinceForDeparture } from "../services/journey.service.js";
 
 /* ===========================
  *  AUTH: ADMIN LOGIN (JWT)
@@ -545,6 +546,15 @@ export const addTimelineEvent = async (req, res) => {
     // Update TourDeparture (status/timeline đã chuyển sang đây)
     const departure = await TourDeparture.findByIdAndUpdate(id, update, { new: true });
     if (!departure) return res.status(404).json({ message: "Departure not found" });
+
+    // Khi lịch trình kết thúc, tự động cập nhật các booking 'confirmed' sang 'completed'
+    if (eventType === "finished") {
+      await Booking.updateMany(
+        { tourDepartureId: id, bookingStatus: "confirmed" },
+        { $set: { bookingStatus: "completed" } }
+      );
+      await unlockProvinceForDeparture(id);
+    }
 
     res.json({ message: "Timeline updated", departure });
   } catch (err) {

@@ -5,6 +5,8 @@ import { Tour } from "../models/Tour.js";
 import { TourDeparture } from "../models/TourDeparture.js";
 import { Chat } from "../models/Chat.js";
 
+const CANCELLED_BOOKING_STATUSES = ["cancelled", "x"];
+
 /* Helper: xác định role từ token */
 function getRole(user) {
   if (!user) return "guest";
@@ -29,8 +31,15 @@ async function canAccessBooking(user, booking) {
     return true;
 
   if (role === "leader") {
-    const tour = await Tour.findById(booking.tourId).select("leaderId");
-    if (tour && String(tour.leaderId) === String(user.id)) return true;
+    if (booking.tourDepartureId) {
+      const departure = await TourDeparture.findById(booking.tourDepartureId).select("leaderId");
+      if (departure?.leaderId && String(departure.leaderId) === String(user.id)) return true;
+    }
+
+    if (booking.tourId) {
+      const tour = await Tour.findById(booking.tourId).select("leaderId");
+      if (tour && String(tour.leaderId) === String(user.id)) return true;
+    }
   }
 
   return false;
@@ -61,7 +70,7 @@ async function canAccessTourRoom(user, roomId) {
       const hasBooking = await Booking.exists({
         tourDepartureId: roomId,
         userId: user.id,
-        bookingStatus: { $ne: "x" },
+        bookingStatus: { $nin: CANCELLED_BOOKING_STATUSES },
       });
       if (hasBooking) return true;
     }
@@ -78,7 +87,7 @@ async function canAccessTourRoom(user, roomId) {
     const hasBooking = await Booking.exists({
       tourId: roomId,
       userId: user.id,
-      bookingStatus: { $ne: "x" },
+      bookingStatus: { $nin: CANCELLED_BOOKING_STATUSES },
     });
     if (hasBooking) return true;
   }
@@ -140,7 +149,7 @@ export const sendBookingMessage = async (req, res) => {
     const msg = await Chat.create({
       roomType: "booking",
       bookingCode: code,
-      tourId: booking.tourId,
+      tourId: booking.tourDepartureId || booking.tourId,
       fromId: new mongoose.Types.ObjectId(req.user.id),
       fromRole: role,
       content: content.trim(),

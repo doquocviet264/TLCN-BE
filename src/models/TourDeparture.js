@@ -7,7 +7,28 @@ const TimelineEventSchema = new mongoose.Schema({
   at:        { type: Date, required: true },       // thời điểm xảy ra
   place:     { type: String, default: "" },         // địa điểm (tùy chọn)
   note:      { type: String, default: "" },
-  createdBy: { type: mongoose.Schema.Types.ObjectId, ref: "Admin", required: true }
+  createdBy: { type: mongoose.Schema.Types.ObjectId, ref: "Admin", required: true },
+  createdByRole: { type: String, enum: ["admin", "leader"], default: "admin" }
+}, { _id: false });
+
+const PassengerCheckinSchema = new mongoose.Schema({
+  bookingId: { type: mongoose.Schema.Types.ObjectId, ref: "Booking", required: true },
+  isPresent: { type: Boolean, default: false },
+  checkedAt: { type: Date, default: Date.now },
+  checkedBy: { type: mongoose.Schema.Types.ObjectId, ref: "Leader" }
+}, { _id: false });
+
+const LeaderReportSchema = new mongoose.Schema({
+  summary: { type: String, default: "" },
+  incidents: { type: String, default: "" },
+  expenseNote: { type: String, default: "" },
+  noShowBookingIds: [{ type: mongoose.Schema.Types.ObjectId, ref: "Booking" }],
+  status: { type: String, enum: ["submitted", "reviewed"], default: "submitted" },
+  submittedAt: Date,
+  submittedBy: { type: mongoose.Schema.Types.ObjectId, ref: "Leader" },
+  reviewedAt: Date,
+  reviewedBy: { type: mongoose.Schema.Types.ObjectId, ref: "Admin" },
+  reviewNote: { type: String, default: "" }
 }, { _id: false });
 
 /* ------------------- TourDeparture Schema ------------------- */
@@ -42,7 +63,13 @@ const tourDepartureSchema = new mongoose.Schema({
   timeline:   { type: [TimelineEventSchema], default: [] },
   departedAt: Date,
   arrivedAt:  Date,
-  finishedAt: Date
+  finishedAt: Date,
+
+  // Danh sách điểm danh (khách có mặt/vắng mặt)
+  passengerCheckins: { type: [PassengerCheckinSchema], default: [] },
+
+  // Post-tour report submitted by the assigned leader.
+  leaderReport: { type: LeaderReportSchema, default: null }
 }, { timestamps: true });
 
 /* ------------------- Indexes ------------------- */

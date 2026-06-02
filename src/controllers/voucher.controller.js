@@ -57,6 +57,51 @@ export const getVouchers = async (req, res) => {
   }
 };
 
+// Public: lay danh sach voucher dang hien thi cho trang chu/user.
+export const getPublicVouchers = async (req, res) => {
+  try {
+    const limit = Math.min(parseInt(req.query.limit) || 6, 12);
+    const now = new Date();
+
+    const vouchers = await Voucher.find({
+      status: "active",
+      validFrom: { $lte: now },
+      validUntil: { $gte: now },
+      $or: [
+        { usageLimit: null },
+        { $expr: { $lt: ["$usedCount", "$usageLimit"] } },
+      ],
+    })
+      .populate("applicableTours", "title code images price priceAdult")
+      .sort({ validUntil: 1, createdAt: -1 })
+      .limit(limit);
+
+    res.json({ data: vouchers });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+};
+
+// Public: chi tiet voucher/su kien khuyen mai.
+export const getPublicVoucherById = async (req, res) => {
+  try {
+    const now = new Date();
+    const voucher = await Voucher.findOne({
+      _id: req.params.id,
+      status: "active",
+      validUntil: { $gte: now },
+    }).populate("applicableTours", "title code images price priceAdult");
+
+    if (!voucher) {
+      return res.status(404).json({ message: "Voucher khong ton tai hoac da het han" });
+    }
+
+    res.json(voucher);
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+};
+
 // 3. Xem chi tiết Voucher (Admin)
 export const getVoucherById = async (req, res) => {
   try {
@@ -186,4 +231,3 @@ export const applyVoucher = async (req, res) => {
     res.status(400).json({ message: err.message });
   }
 };
-

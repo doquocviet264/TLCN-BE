@@ -17,7 +17,10 @@ export const toggleFavorite = async (req, res) => {
       return res.status(404).json({ message: "Không tìm thấy tour" });
     }
 
-    const existingFavorite = await Favorite.findOne({ userId, tourId });
+    const existingFavorite = await Favorite.findOne({ 
+      userId: new mongoose.Types.ObjectId(userId), 
+      tourId: new mongoose.Types.ObjectId(tourId) 
+    });
 
     if (existingFavorite) {
       await Favorite.findByIdAndDelete(existingFavorite._id);
@@ -65,7 +68,10 @@ export const checkFavorite = async (req, res) => {
       return res.status(400).json({ message: "Mã tour không hợp lệ" });
     }
 
-    const favorite = await Favorite.findOne({ userId, tourId });
+    const favorite = await Favorite.findOne({ 
+      userId: new mongoose.Types.ObjectId(userId), 
+      tourId: new mongoose.Types.ObjectId(tourId) 
+    });
 
     res.status(200).json({ isFavorite: !!favorite });
   } catch (error) {

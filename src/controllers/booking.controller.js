@@ -10,6 +10,7 @@ import {
   getBookingCreatedTemplate,
   getPaymentReceiptTemplate,
 } from "../utils/emailTemplates.js";
+import { Notification } from "../models/Notification.js";
 
 // 1. Tạo Booking Mới (Gửi mail xác nhận đặt tour)
 export const createBooking = async (req, res) => {
@@ -128,7 +129,7 @@ export const createBooking = async (req, res) => {
           voucherCode,
           discountAmount,
           bookingStatus: "pending",
-          paymentMethod: "momo",
+          paymentMethod: req.body.paymentMethod || "momo",
           paidAmount: 0,
           depositPaid: false,
           paymentRefs: [],
@@ -156,6 +157,20 @@ export const createBooking = async (req, res) => {
       }).catch((err) => console.error("Send booking mail error:", err));
     }
     // ------------------------------------
+    
+    // --- TẠO THÔNG BÁO ---
+    if (booking.userId) {
+      Notification.create({
+        type: "booking",
+        title: "Đặt tour thành công",
+        content: `Bạn đã đặt thành công tour "${tour.title}". Mã đơn: ${booking.code}. Vui lòng thanh toán để giữ chỗ.`,
+        link: `/user/history`,
+        targetType: "user",
+        targetUsers: [booking.userId],
+        targetTourId: tour._id,
+      }).catch((err) => console.error("Create notification error:", err));
+    }
+    // ---------------------
 
     return res.status(201).json({
       message: "Booking created successfully",
@@ -292,7 +307,7 @@ export const myBookings = async (req, res) => {
   rows = rows.map((b) => {
     if (b.tourDepartureId) {
       b.tourId = {
-        _id: b.tourDepartureId._id,
+        _id: b.tourDepartureId.tourId?._id || b.tourDepartureId.tourId,
         title: b.tourDepartureId.tourId?.title,
         destination: b.tourDepartureId.tourId?.destination,
         startDate: b.tourDepartureId.startDate,
@@ -358,7 +373,7 @@ export const getMyBookingDetail = async (req, res) => {
     let mappedTour = null;
     if (booking.tourDepartureId) {
       mappedTour = {
-        id: booking.tourDepartureId._id,
+        id: booking.tourDepartureId.tourId?._id || booking.tourDepartureId.tourId,
         title: booking.tourDepartureId.tourId?.title,
         destination: booking.tourDepartureId.tourId?.destination,
         startDate: booking.tourDepartureId.startDate,
@@ -395,6 +410,7 @@ export const getAdminBookings = async (req, res) => {
     const { 
       status, 
       tourId, 
+      departureId,
       search, 
       startDate, 
       endDate, 
@@ -416,6 +432,11 @@ export const getAdminBookings = async (req, res) => {
       const departuresOfTour = await TourDeparture.find({ tourId }).select("_id");
       const departureIds = departuresOfTour.map(d => d._id);
       filter.tourDepartureId = { $in: departureIds };
+    }
+
+    // 2.1 Lọc theo một Departure cụ thể (Mới bổ sung)
+    if (departureId && mongoose.isValidObjectId(departureId)) {
+      filter.tourDepartureId = departureId;
     }
 
     // 3. Lọc theo khoảng ngày khởi hành (Departure Date Range)
@@ -507,7 +528,7 @@ export const getAdminBookings = async (req, res) => {
     bookings = bookings.map((b) => {
       if (b.tourDepartureId) {
         b.tourId = {
-          _id: b.tourDepartureId._id,
+          _id: b.tourDepartureId.tourId?._id || b.tourDepartureId.tourId,
           title: b.tourDepartureId.tourId?.title,
           destination: b.tourDepartureId.tourId?.destination,
           startDate: b.tourDepartureId.startDate,
@@ -541,7 +562,7 @@ export const getAdminBookingById = async (req, res) => {
     
     if (booking.tourDepartureId) {
       booking.tourId = {
-        _id: booking.tourDepartureId._id,
+        _id: booking.tourDepartureId.tourId?._id || booking.tourDepartureId.tourId,
         title: booking.tourDepartureId.tourId?.title,
         destination: booking.tourDepartureId.tourId?.destination,
         startDate: booking.tourDepartureId.startDate,
@@ -704,6 +725,20 @@ export const adminCreateBooking = async (req, res) => {
       }).catch((err) => console.error("Send booking mail error:", err));
     }
 
+    // --- TẠO THÔNG BÁO ---
+    if (booking.userId) {
+      Notification.create({
+        type: "booking",
+        title: "Được tạo đơn đặt tour",
+        content: `Admin đã tạo đơn đặt tour "${tour.title}" cho bạn. Mã đơn: ${booking.code}.`,
+        link: `/user/history`,
+        targetType: "user",
+        targetUsers: [booking.userId],
+        targetTourId: tour._id,
+      }).catch((err) => console.error("Create notification error:", err));
+    }
+    // ---------------------
+
     return res.status(201).json({
       message: "Booking created successfully",
       booking,
@@ -744,6 +779,31 @@ export const updateAdminBookingStatus = async (req, res) => {
     if (status === "confirmed" && booking.tourDepartureId && booking.tourDepartureId.tourId) {
       notifyTourConfirmed(booking.tourDepartureId.tourId._id).catch(console.error);
     }
+
+    // --- TẠO THÔNG BÁO ---
+    if (booking.userId) {
+       let title = "";
+       let content = "";
+       if (status === "confirmed") {
+          title = "Đơn đặt tour đã được xác nhận";
+          content = `Đơn đặt tour #${booking.code} của bạn đã được Admin xác nhận.`;
+       } else if (status === "cancelled") {
+          title = "Đơn đặt tour đã bị hủy";
+          content = `Đơn đặt tour #${booking.code} của bạn đã bị hủy. Lý do: ${cancelReason || "Không có"}. Tiến độ hoàn tiền (nếu có) sẽ được thông báo sau.`;
+       }
+       
+       if (title) {
+          Notification.create({
+            type: "booking",
+            title,
+            content,
+            link: `/user/history`,
+            targetType: "user",
+            targetUsers: [booking.userId._id || booking.userId],
+          }).catch(console.error);
+       }
+    }
+    // ---------------------
 
     if (booking.tourDepartureId) {
       booking.tourId = {

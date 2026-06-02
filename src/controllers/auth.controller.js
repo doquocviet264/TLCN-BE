@@ -9,6 +9,7 @@ import {
   getResetPasswordTemplate,
   getOtpTemplate,
 } from "../utils/emailTemplates.js";
+import { Notification } from "../models/Notification.js";
 
 // ============================================================
 // 1. ĐĂNG KÝ (Gửi OTP, chưa cho đăng nhập ngay)
@@ -127,6 +128,17 @@ export const verifyEmail = async (req, res) => {
       subject: "🎉 Chào mừng bạn gia nhập Travela!",
       html: getWelcomeTemplate(user.fullName),
     }).catch(console.error);
+
+    // --- TẠO THÔNG BÁO CHÀO MỪNG ---
+    Notification.create({
+      type: "system",
+      title: "Chào mừng bạn đến với Travela!",
+      content: `Chúc mừng bạn đã trở thành thành viên của Travela. Hãy bắt đầu khám phá những chuyến đi tuyệt vời cùng chúng tôi nhé.`,
+      link: `/tours`,
+      targetType: "user",
+      targetUsers: [user._id],
+    }).catch(console.error);
+    // --------------------------------
 
     res.json({
       message: "Kích hoạt tài khoản thành công! Bạn có thể đăng nhập ngay.",

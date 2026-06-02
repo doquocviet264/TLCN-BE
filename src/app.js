@@ -23,8 +23,12 @@ import wardRoutes from "./routes/ward.routes.js";
 import recommendationRoutes from "./routes/recommendations.routes.js";
 import voucherRoutes from "./routes/voucher.routes.js";
 import favoriteRoutes from "./routes/favorite.routes.js";
+import notificationRoutes from "./routes/notification.routes.js";
+import travelMemoryRoutes from "./routes/travelMemory.routes.js";
+import journeyRoutes from "./routes/journey.routes.js";
 
 import { registerConfirmOrRefundJob } from "./jobs/confirmOrRefund.job.js";
+import { registerNotificationJobs } from "./jobs/notification.jobs.js";
 
 const app = express();
 
@@ -102,10 +106,14 @@ app.use("/api/reviews", reviewRoutes);
 app.use("/api/blog", blogRouter);
 app.use("/api/chat", chatRoutes);
 app.use("/api/checkin", checkinRoutes);
+app.use("/api/checkins", checkinRoutes);
 app.use("/api/ward", wardRoutes);
 app.use("/api/recommendations", recommendationRoutes);
 app.use("/api/vouchers", voucherRoutes);
 app.use("/api/favorites", favoriteRoutes);
+app.use("/api/notifications", notificationRoutes);
+app.use("/api/travel-memories", travelMemoryRoutes);
+app.use("/api/journey", journeyRoutes);
 
 /* =========================
  *  404 FALLBACK
@@ -116,5 +124,6 @@ app.use((req, res) => res.status(404).json({ message: "Not Found" }));
  *  CRON JOBS
  * ========================= */
 registerConfirmOrRefundJob();
+registerNotificationJobs();
 
 export default app;

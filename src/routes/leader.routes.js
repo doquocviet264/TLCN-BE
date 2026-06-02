@@ -8,9 +8,14 @@ import {
   leaderCreateExpense,
   leaderGetExpenses,
   leaderGetTourBookings,
+  leaderUpdateBookingCheckin,
+  leaderGetMe,
+  leaderSubmitTourReport,
 } from "../controllers/leader.controller.js";
 
 const router = Router();
+
+router.get("/me", auth, leaderOnly, leaderGetMe);
 
 /**
  * @openapi
@@ -69,6 +74,16 @@ router.get("/departures/:id/passengers", auth, leaderOnly, leaderGetPassengers);
 
 /**
  * @openapi
+ * /api/leader/departures/{id}/bookings/{bookingId}/checkin:
+ *   patch:
+ *     tags: [Leader]
+ *     summary: Điểm danh (check-in) booking
+ *     security: [ { bearerAuth: [] } ]
+ */
+router.patch("/departures/:id/bookings/:bookingId/checkin", auth, leaderOnly, leaderUpdateBookingCheckin);
+
+/**
+ * @openapi
  * /api/leader/departures/{id}/timeline:
  *   patch:
  *     tags: [Leader]
@@ -102,6 +117,8 @@ router.get("/departures/:id/passengers", auth, leaderOnly, leaderGetPassengers);
  *       404: { description: Departure not found or not assigned to you }
  */
 router.patch("/departures/:id/timeline", auth, leaderOnly, leaderOwnsDeparture, leaderAddTimeline);
+
+router.patch("/departures/:id/report", auth, leaderOnly, leaderOwnsDeparture, leaderSubmitTourReport);
 
 /**
  * @openapi

@@ -78,7 +78,7 @@ export const getReviewsOfTour = async (req, res) => {
 export const myReviews = async (req, res) => {
   try {
     const data = await Review.find({ userId: req.user.id })
-      .populate("tourId", "title destination startDate endDate")
+      .populate("tourId", "title destination images startDate endDate")
       .sort({ createdAt: -1 })
       .lean();
 
@@ -91,7 +91,7 @@ export const myReviews = async (req, res) => {
 // ADMIN: GET /api/reviews/admin - List all reviews with filters and pagination
 export const getAdminReviews = async (req, res) => {
   try {
-    const { page = 1, limit = 20, tourId, minRating, maxRating, search } = req.query;
+    const { page = 1, limit = 20, tourId, minRating, maxRating, search, startDate, endDate } = req.query;
     const skip = (page - 1) * limit;
 
     // Build filter
@@ -105,6 +105,17 @@ export const getAdminReviews = async (req, res) => {
       filter.rating = {};
       if (minRating) filter.rating.$gte = parseInt(minRating);
       if (maxRating) filter.rating.$lte = parseInt(maxRating);
+    }
+
+    // Lọc theo ngày tạo (createdAt)
+    if (startDate || endDate) {
+      filter.createdAt = {};
+      if (startDate) filter.createdAt.$gte = new Date(startDate);
+      if (endDate) {
+        const end = new Date(endDate);
+        end.setHours(23, 59, 59, 999);
+        filter.createdAt.$lte = end;
+      }
     }
 
     // Get total count

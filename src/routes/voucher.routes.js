@@ -4,9 +4,12 @@ import {
   createVoucher,
   getVouchers,
   getVoucherById,
+  getPublicVouchers,
+  getPublicVoucherById,
   updateVoucher,
   deleteVoucher,
-  applyVoucher
+  applyVoucher,
+  getMyVouchers
 } from "../controllers/voucher.controller.js";
 
 const router = Router();
@@ -45,6 +48,8 @@ const router = Router();
 router.post("/apply", applyVoucher); 
 router.post("/validate", applyVoucher); 
 router.get("/me", auth, getMyVouchers);
+router.get("/public", getPublicVouchers);
+router.get("/public/:id", getPublicVoucherById);
 
 // Admin routes
 /**

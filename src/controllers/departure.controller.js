@@ -4,6 +4,9 @@ import { TourDeparture } from "../models/TourDeparture.js";
 import { Tour }          from "../models/Tour.js";
 import { Leader }        from "../models/Leader.js";
 import { Expense }       from "../models/Expense.js";
+import { Booking }       from "../models/Booking.js";
+import { Notification }  from "../models/Notification.js";
+import { unlockProvinceForDeparture } from "../services/journey.service.js";
 
 /* ========================================================
  *  1. Tạo lịch khởi hành mới cho 1 Tour Template
@@ -59,9 +62,23 @@ export const listDepartures = async (req, res) => {
     if (!mongoose.isValidObjectId(tourId))
       return res.status(400).json({ message: "Invalid tourId" });
 
-    const { status, page = 1, limit = 50 } = req.query;
+    const { status, startDate, endDate, page = 1, limit = 50 } = req.query;
     const filter = { tourId: new mongoose.Types.ObjectId(tourId) };
+    
+    // Lọc theo trạng thái
     if (status) filter.status = status;
+
+    // Lọc theo khoảng thời gian khởi hành
+    if (startDate || endDate) {
+      filter.startDate = {};
+      if (startDate) filter.startDate.$gte = new Date(startDate);
+      if (endDate) {
+        // Thiết lập đến cuối ngày của endDate
+        const end = new Date(endDate);
+        end.setHours(23, 59, 59, 999);
+        filter.startDate.$lte = end;
+      }
+    }
 
     const p = Math.max(parseInt(page, 10) || 1, 1);
     const l = Math.min(parseInt(limit, 10) || 50, 200);
@@ -164,6 +181,34 @@ export const assignLeaderToDeparture = async (req, res) => {
     ).populate("leaderId", "fullName phoneNumber email");
 
     if (!departure) return res.status(404).json({ message: "Departure not found" });
+
+    // --- TẠO THÔNG BÁO CHO KHÁCH HÀNG KHI PHÂN CÔNG HDV ---
+    if (leaderId && update.leaderId) {
+       const bookings = await Booking.find({
+          tourDepartureId: id,
+          bookingStatus: { $ne: "cancelled" },
+          userId: { $ne: null }
+       }).select("userId");
+
+       const userIds = [...new Set(bookings.map(b => b.userId.toString()))];
+
+       if (userIds.length > 0) {
+          const leader = await Leader.findById(leaderId);
+          Notification.create({
+            type: "tour",
+            title: "Cập nhật Hướng dẫn viên",
+            content: `Chuyến đi của bạn đã được phân công Hướng dẫn viên: ${leader.fullName} - SĐT: ${leader.phoneNumber}.`,
+            link: `/user/history`,
+            targetType: "all", // Trick: use all to bypass single user schema limit if we want, or targetType: 'user' with targetUsers array. 
+            // Wait, targetType: "user" allows multiple users in targetUsers array. Let's use targetType: "user".
+            targetType: "user",
+            targetUsers: userIds,
+            targetTourId: departure.tourId,
+          }).catch(console.error);
+       }
+    }
+    // --------------------------------------------------------
+
     res.json({ message: "Leader assigned", departure });
   } catch (err) {
     res.status(500).json({ message: err.message });
@@ -208,6 +253,15 @@ export const addTimelineToDeparture = async (req, res) => {
 
     const departure = await TourDeparture.findByIdAndUpdate(id, update, { new: true });
     if (!departure) return res.status(404).json({ message: "Departure not found" });
+
+    // Khi lịch trình kết thúc, tự động cập nhật các booking 'confirmed' sang 'completed'
+    if (eventType === "finished") {
+      await Booking.updateMany(
+        { tourDepartureId: id, bookingStatus: "confirmed" },
+        { $set: { bookingStatus: "completed" } }
+      );
+      await unlockProvinceForDeparture(id);
+    }
 
     res.json({ message: "Timeline updated", departure });
   } catch (err) {
