@@ -7,6 +7,9 @@ import {
   createMemory,
   createMemoryFromBooking,
   getPublicMemories,
+  getMemoryComments,
+  createMemoryComment,
+  deleteMemoryComment,
   likeMemory,
   unlikeMemory,
 } from "../controllers/travelMemory.controller.js";
@@ -33,6 +36,10 @@ router.post(
 router.get("/public", auth, getPublicMemories);
 
 // POST /api/travel-memories/:id/like - Thích
+router.get("/:id/comments", auth, getMemoryComments);
+router.post("/:id/comments", auth, createMemoryComment);
+router.delete("/:id/comments/:commentId", auth, deleteMemoryComment);
+
 router.post("/:id/like", auth, likeMemory);
 
 // DELETE /api/travel-memories/:id/like - Bỏ thích

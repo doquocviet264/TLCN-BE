@@ -3,6 +3,7 @@ import { ProvinceProgress } from "../models/ProvinceProgress.js";
 import { Booking } from "../models/Booking.js";
 import { TourDeparture } from "../models/TourDeparture.js";
 import { MemoryLike } from "../models/MemoryLike.js";
+import { MemoryComment } from "../models/MemoryComment.js";
 import cloudinary from "../config/cloudinary.js";
 
 const hasObjectId = (items = [], id) =>
@@ -10,6 +11,10 @@ const hasObjectId = (items = [], id) =>
 
 const isValidMemoryImages = (images) =>
   Array.isArray(images) && images.length >= 1 && images.length <= 3;
+
+const canAccessMemory = (memory, userId) =>
+  memory?.privacy === "public" ||
+  memory?.userId?.toString() === userId?.toString();
 
 const uploadImageBuffer = (file, folder) =>
   new Promise((resolve, reject) => {
@@ -306,6 +311,153 @@ export const getPublicMemories = async (req, res) => {
   } catch (error) {
     console.error("Error in getPublicMemories:", error);
     res.status(500).json({ success: false, message: "Lỗi máy chủ", error: error.message });
+  }
+};
+
+export const getMemoryComments = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { id: memoryId } = req.params;
+    const { page = 1, limit = 20 } = req.query;
+
+    const memory = await TravelMemory.findById(memoryId).select("userId privacy");
+    if (!memory) {
+      return res
+        .status(404)
+        .json({ success: false, message: "Không tìm thấy kỷ niệm" });
+    }
+
+    if (!canAccessMemory(memory, userId)) {
+      return res.status(403).json({
+        success: false,
+        message: "Bạn không có quyền xem bình luận này",
+      });
+    }
+
+    const pageNumber = Math.max(Number(page) || 1, 1);
+    const limitNumber = Math.min(Math.max(Number(limit) || 20, 1), 50);
+
+    const comments = await MemoryComment.find({ memoryId })
+      .populate("userId", "fullName avatar")
+      .sort({ createdAt: 1 })
+      .skip((pageNumber - 1) * limitNumber)
+      .limit(limitNumber)
+      .lean();
+
+    const total = await MemoryComment.countDocuments({ memoryId });
+
+    res.status(200).json({
+      success: true,
+      data: comments,
+      pagination: {
+        page: pageNumber,
+        limit: limitNumber,
+        total,
+        totalPages: Math.ceil(total / limitNumber),
+      },
+    });
+  } catch (error) {
+    console.error("Error in getMemoryComments:", error);
+    res
+      .status(500)
+      .json({ success: false, message: "Lỗi máy chủ", error: error.message });
+  }
+};
+
+export const createMemoryComment = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { id: memoryId } = req.params;
+    const content = (req.body.content || "").trim();
+
+    if (!content) {
+      return res.status(400).json({
+        success: false,
+        message: "Vui lòng nhập nội dung bình luận",
+      });
+    }
+
+    if (content.length > 500) {
+      return res.status(400).json({
+        success: false,
+        message: "Bình luận tối đa 500 ký tự",
+      });
+    }
+
+    const memory = await TravelMemory.findById(memoryId).select("userId privacy");
+    if (!memory) {
+      return res
+        .status(404)
+        .json({ success: false, message: "Không tìm thấy kỷ niệm" });
+    }
+
+    if (!canAccessMemory(memory, userId)) {
+      return res.status(403).json({
+        success: false,
+        message: "Bạn không có quyền bình luận kỷ niệm này",
+      });
+    }
+
+    let comment = await MemoryComment.create({
+      memoryId,
+      userId,
+      content,
+    });
+
+    await TravelMemory.findByIdAndUpdate(memoryId, {
+      $inc: { commentsCount: 1 },
+    });
+
+    comment = await MemoryComment.findById(comment._id)
+      .populate("userId", "fullName avatar")
+      .lean();
+
+    res.status(201).json({
+      success: true,
+      message: "Đã bình luận",
+      comment,
+    });
+  } catch (error) {
+    console.error("Error in createMemoryComment:", error);
+    res
+      .status(500)
+      .json({ success: false, message: "Lỗi máy chủ", error: error.message });
+  }
+};
+
+export const deleteMemoryComment = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { id: memoryId, commentId } = req.params;
+
+    const comment = await MemoryComment.findOne({ _id: commentId, memoryId });
+    if (!comment) {
+      return res
+        .status(404)
+        .json({ success: false, message: "Không tìm thấy bình luận" });
+    }
+
+    const isOwner = comment.userId.toString() === userId.toString();
+    const isAdmin = req.user.role === "admin";
+
+    if (!isOwner && !isAdmin) {
+      return res.status(403).json({
+        success: false,
+        message: "Bạn không có quyền xóa bình luận này",
+      });
+    }
+
+    await MemoryComment.findByIdAndDelete(commentId);
+    await TravelMemory.findByIdAndUpdate(memoryId, {
+      $inc: { commentsCount: -1 },
+    });
+
+    res.status(200).json({ success: true, message: "Đã xóa bình luận" });
+  } catch (error) {
+    console.error("Error in deleteMemoryComment:", error);
+    res
+      .status(500)
+      .json({ success: false, message: "Lỗi máy chủ", error: error.message });
   }
 };
 

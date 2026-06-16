@@ -9,6 +9,7 @@
     "start": "node server.js",
     "seed:admin": "node scripts/seed-admin.js",
     "seed:tours": "node scripts/seed-tours.js",
+    "seed:journey": "node scripts/seed-journey-data.mjs",
     "seed:all": "node scripts/seed-admin.js && node scripts/seed-tours.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
@@ -37,6 +38,7 @@
     "passport": "^0.7.0",
     "passport-google-oauth20": "^2.0.0",
     "sequelize": "^6.37.7",
+    "socket.io": "^4.8.3",
     "swagger-jsdoc": "^6.2.8",
     "swagger-ui-express": "^5.0.1",
     "vnpay": "^2.4.4"

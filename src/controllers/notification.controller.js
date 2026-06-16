@@ -6,17 +6,22 @@ import mongoose from "mongoose";
 // Lấy danh sách thông báo của User
 export const getMyNotifications = async (req, res) => {
   try {
-    const userId = req.user._id;
+    const userId = req.user.id || req.user._id;
     const { page = 1, limit = 20 } = req.query;
 
     const query = {
       isActive: true,
-      $or: [
-        { targetType: "all" },
-        { targetType: "user", targetUsers: userId },
-        // targetType: 'tour' (Nếu cần thiết sẽ join với Booking để lấy những user thuộc tour đó)
-      ],
-      $or: [{ expiresAt: { $gt: new Date() } }, { expiresAt: null }],
+      $and: [
+        {
+          $or: [
+            { targetType: "all" },
+            { targetType: "user", targetUsers: userId },
+          ]
+        },
+        {
+          $or: [{ expiresAt: { $gt: new Date() } }, { expiresAt: null }]
+        }
+      ]
     };
 
     const notifications = await Notification.find(query)
@@ -49,15 +54,21 @@ export const getMyNotifications = async (req, res) => {
 // Đếm số lượng thông báo chưa đọc
 export const getUnreadCount = async (req, res) => {
   try {
-    const userId = req.user._id;
+    const userId = req.user.id || req.user._id;
 
     const query = {
       isActive: true,
-      $or: [
-        { targetType: "all" },
-        { targetType: "user", targetUsers: userId },
+      $and: [
+        {
+          $or: [
+            { targetType: "all" },
+            { targetType: "user", targetUsers: userId },
+          ]
+        },
+        {
+          $or: [{ expiresAt: { $gt: new Date() } }, { expiresAt: null }]
+        }
       ],
-      $or: [{ expiresAt: { $gt: new Date() } }, { expiresAt: null }],
       "readBy.userId": { $ne: userId },
     };
 
@@ -72,7 +83,7 @@ export const getUnreadCount = async (req, res) => {
 // Đánh dấu 1 thông báo là đã đọc
 export const markAsRead = async (req, res) => {
   try {
-    const userId = req.user._id;
+    const userId = req.user.id || req.user._id;
     const { id } = req.params;
 
     const notification = await Notification.findById(id);
@@ -86,11 +97,10 @@ export const markAsRead = async (req, res) => {
     ) : false;
 
     if (!isRead) {
-      if (!Array.isArray(notification.readBy)) {
-        notification.readBy = [];
-      }
-      notification.readBy.push({ userId, readAt: new Date() });
-      await notification.save();
+      await Notification.updateOne(
+        { _id: id },
+        { $push: { readBy: { userId, readAt: new Date() } } }
+      );
     }
 
     res.status(200).json({ success: true, message: "Đánh dấu đã đọc thành công" });
@@ -102,24 +112,30 @@ export const markAsRead = async (req, res) => {
 // Đánh dấu tất cả thông báo là đã đọc
 export const markAllAsRead = async (req, res) => {
   try {
-    const userId = req.user._id;
+    const userId = req.user.id || req.user._id;
 
     const unreadNotifications = await Notification.find({
       isActive: true,
-      $or: [
-        { targetType: "all" },
-        { targetType: "user", targetUsers: userId },
+      $and: [
+        {
+          $or: [
+            { targetType: "all" },
+            { targetType: "user", targetUsers: userId },
+          ]
+        },
+        {
+          $or: [{ expiresAt: { $gt: new Date() } }, { expiresAt: null }]
+        }
       ],
       "readBy.userId": { $ne: userId },
     });
 
-    const updatePromises = unreadNotifications.map((notif) => {
-      if (!Array.isArray(notif.readBy)) {
-        notif.readBy = [];
-      }
-      notif.readBy.push({ userId, readAt: new Date() });
-      return notif.save();
-    });
+    const updatePromises = unreadNotifications.map((notif) =>
+      Notification.updateOne(
+        { _id: notif._id },
+        { $push: { readBy: { userId, readAt: new Date() } } }
+      )
+    );
 
     await Promise.all(updatePromises);
 

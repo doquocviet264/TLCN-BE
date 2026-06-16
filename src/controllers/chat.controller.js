@@ -4,6 +4,7 @@ import { Booking } from "../models/Booking.js";
 import { Tour } from "../models/Tour.js";
 import { TourDeparture } from "../models/TourDeparture.js";
 import { Chat } from "../models/Chat.js";
+import { getIO } from "../socket.js";
 
 const CANCELLED_BOOKING_STATUSES = ["cancelled", "x"];
 
@@ -45,55 +46,44 @@ async function canAccessBooking(user, booking) {
   return false;
 }
 
-/* Kiểm tra quyền vào nhóm chat tour
-   Lưu ý: roomId có thể là tourId hoặc departureId
-   - Nếu là departureId: Kiểm tra quyền dựa trên TourDeparture
-   - Nếu là tourId: Kiểm tra quyền dựa trên Tour (backward compat)
-*/
-async function canAccessTourRoom(user, roomId) {
-  const role = getRole(user);
-  if (!user) return false;
-  if (role === "admin") return true;
-
-  if (!mongoose.isValidObjectId(roomId)) return false;
-
-  // Thử tìm TourDeparture trước (chat theo departure)
-  const departure = await TourDeparture.findById(roomId).select("leaderId tourId");
-
-  if (departure) {
-    // Nếu là departure ID
-    if (role === "leader") {
-      if (departure.leaderId && String(departure.leaderId) === String(user.id)) return true;
-    }
-
-    if (role === "user") {
-      const hasBooking = await Booking.exists({
-        tourDepartureId: roomId,
-        userId: user.id,
-        bookingStatus: { $nin: CANCELLED_BOOKING_STATUSES },
-      });
-      if (hasBooking) return true;
-    }
-    return false;
-  }
-
-  // Fallback: Kiểm tra nếu là Tour ID (backward compat)
-  if (role === "leader") {
-    const tour = await Tour.findById(roomId).select("leaderId");
-    if (tour && String(tour.leaderId) === String(user.id)) return true;
-  }
-
-  if (role === "user") {
-    const hasBooking = await Booking.exists({
-      tourId: roomId,
-      userId: user.id,
-      bookingStatus: { $nin: CANCELLED_BOOKING_STATUSES },
-    });
-    if (hasBooking) return true;
-  }
-
-  return false;
+async function getSupportThreadList(match = {}) {
+  return Chat.aggregate([
+    { $match: { roomType: "support", ...match } },
+    { $sort: { createdAt: -1 } },
+    {
+      $group: {
+        _id: "$supportId",
+        supportId: { $first: "$supportId" },
+        name: { $max: "$name" },
+        email: { $max: "$email" },
+        status: { $first: { $ifNull: ["$status", "active"] } },
+        lastMessage: { $first: "$content" },
+        lastTime: { $first: "$createdAt" },
+        updatedAt: { $first: "$createdAt" },
+        createdAt: { $min: "$createdAt" },
+        messageCount: { $sum: 1 },
+      },
+    },
+    { $sort: { lastTime: -1 } },
+  ]);
 }
+
+async function getSupportIdsForUser(user) {
+  if (!user?.id || !mongoose.isValidObjectId(user.id)) return [];
+
+  const rows = await Chat.aggregate([
+    {
+      $match: {
+        roomType: "support",
+        fromId: new mongoose.Types.ObjectId(user.id),
+      },
+    },
+    { $group: { _id: "$supportId" } },
+  ]);
+
+  return rows.map((row) => row._id).filter(Boolean);
+}
+
 
 /* =========================
  * 1) BOOKING CHAT
@@ -154,7 +144,11 @@ export const sendBookingMessage = async (req, res) => {
       fromRole: role,
       content: content.trim(),
       isSystem: false,
+      status: "active",
     });
+
+    const io = getIO();
+    io.to(code).emit("receive_message", msg);
 
     res.status(201).json({ message: "Sent", data: msg });
   } catch (err) {
@@ -198,6 +192,7 @@ export const startSupportChat = async (req, res) => {
       email: user?.email || email || "",
       content: content.trim(),
       isSystem: false,
+      status: "active",
     });
 
     res.status(201).json({
@@ -239,9 +234,15 @@ export const sendSupportMessage = async (req, res) => {
       return res.status(400).json({ message: "Content is required" });
     }
 
-    const exists = await Chat.exists({ roomType: "support", supportId });
-    if (!exists)
+    const latest = await Chat.findOne({ roomType: "support", supportId })
+      .sort({ createdAt: -1 })
+      .select("status")
+      .lean();
+    if (!latest)
       return res.status(404).json({ message: "Support thread not found" });
+    if (latest.status === "closed") {
+      return res.status(400).json({ message: "Support thread is closed" });
+    }
 
     // --- ĐÂY LÀ CHỖ QUAN TRỌNG ĐỂ NHẬN DIỆN ADMIN ---
     // Nhờ middleware optionalAuth, req.user sẽ có dữ liệu nếu là Admin
@@ -254,6 +255,7 @@ export const sendSupportMessage = async (req, res) => {
       fromRole: role,
       content: content.trim(),
       isSystem: false,
+      status: "active",
     };
 
     // Chỉ lưu name/email nếu là guest gửi
@@ -264,69 +266,47 @@ export const sendSupportMessage = async (req, res) => {
 
     const msg = await Chat.create(msgData);
 
+    const io = getIO();
+    io.to(supportId).emit("receive_message", msg);
+
     res.status(201).json({ message: "Sent", data: msg });
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
 };
 
-/* =========================================
- * 3) TOUR GROUP CHAT
- * ========================================= */
-
-// GET /api/chat/tour/:tourId
-export const getTourGroupMessages = async (req, res) => {
+// GET /api/chat/user/support
+export const getUserSupportChats = async (req, res) => {
   try {
-    const { tourId } = req.params;
-    if (!mongoose.isValidObjectId(tourId)) {
-      return res.status(400).json({ message: "Invalid tourId" });
+    const supportIds = await getSupportIdsForUser(req.user);
+    if (!supportIds.length) {
+      return res.json({ total: 0, data: [] });
     }
 
-    const ok = await canAccessTourRoom(req.user, tourId);
-    if (!ok) return res.status(403).json({ message: "Forbidden" });
-
-    const msgs = await Chat.find({ roomType: "tour", tourId })
-      .sort({ createdAt: 1 })
-      .lean();
-
-    res.json({ tourId, total: msgs.length, data: msgs });
+    const threads = await getSupportThreadList({ supportId: { $in: supportIds } });
+    res.json({ total: threads.length, data: threads });
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
 };
 
-// POST /api/chat/tour/:tourId
-export const sendTourGroupMessage = async (req, res) => {
+// GET /api/chat/user/history
+export const getUserChatHistory = async (req, res) => {
   try {
-    const { tourId } = req.params;
-    const { content } = req.body || {};
+    const supportIds = await getSupportIdsForUser(req.user);
+    const supportChats = supportIds.length
+      ? await getSupportThreadList({ supportId: { $in: supportIds } })
+      : [];
 
-    if (!mongoose.isValidObjectId(tourId)) {
-      return res.status(400).json({ message: "Invalid tourId" });
-    }
-    if (!content || !content.trim()) {
-      return res.status(400).json({ message: "Content is required" });
-    }
-
-    const ok = await canAccessTourRoom(req.user, tourId);
-    if (!ok) return res.status(403).json({ message: "Forbidden" });
-
-    const role = getRole(req.user);
-
-    const msg = await Chat.create({
-      roomType: "tour",
-      tourId,
-      fromId: new mongoose.Types.ObjectId(req.user.id),
-      fromRole: role,
-      content: content.trim(),
-      isSystem: false,
+    res.json({
+      supportChats,
+      bookingChats: [],
     });
-
-    res.status(201).json({ message: "Sent", data: msg });
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
 };
+
 
 /* =========================================
  * 4) ADMIN APIs (Đã fix Join bảng để hiển thị tên user)
@@ -335,24 +315,31 @@ export const sendTourGroupMessage = async (req, res) => {
 // GET /api/chat/admin/support
 export const getAllSupportChats = async (req, res) => {
   try {
-    const threads = await Chat.aggregate([
-      { $match: { roomType: "support" } },
-      { $sort: { createdAt: -1 } },
-      {
-        $group: {
-          _id: "$supportId",
-          supportId: { $first: "$supportId" },
-          name: { $max: "$name" },
-          email: { $max: "$email" },
-          lastMessage: { $first: "$content" },
-          lastTime: { $first: "$createdAt" },
-          messageCount: { $sum: 1 },
-        },
-      },
-      { $sort: { lastTime: -1 } },
-    ]);
+    const threads = await getSupportThreadList();
 
     res.json({ total: threads.length, data: threads });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+};
+
+// PATCH /api/chat/admin/support/:supportId/close
+export const closeSupportChat = async (req, res) => {
+  try {
+    const { supportId } = req.params;
+    const result = await Chat.updateMany(
+      { roomType: "support", supportId },
+      { $set: { status: "closed" } }
+    );
+
+    if (!result.matchedCount) {
+      return res.status(404).json({ message: "Support thread not found" });
+    }
+
+    const io = getIO();
+    io.to(supportId).emit("support_closed", { supportId, status: "closed" });
+
+    res.json({ message: "Support chat closed" });
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
@@ -424,72 +411,3 @@ export const getAllBookingChats = async (req, res) => {
   }
 };
 
-// GET /api/chat/admin/tours
-export const getAllTourChats = async (req, res) => {
-  try {
-    const threads = await Chat.aggregate([
-      { $match: { roomType: "tour" } },
-      { $sort: { createdAt: -1 } },
-      {
-        $group: {
-          _id: "$tourId",
-          tourId: { $first: "$tourId" },
-          lastMessage: { $first: "$content" },
-          lastTime: { $first: "$createdAt" },
-          messageCount: { $sum: 1 },
-        },
-      },
-      { $sort: { lastTime: -1 } },
-      // Try lookup as departure first
-      {
-        $lookup: {
-          from: "tbl_tour_departures",
-          localField: "tourId",
-          foreignField: "_id",
-          as: "departure",
-        },
-      },
-      // Lookup tour từ departure hoặc trực tiếp
-      {
-        $lookup: {
-          from: "tbl_tour",
-          let: {
-            depTourId: { $arrayElemAt: ["$departure.tourId", 0] },
-            directTourId: "$tourId"
-          },
-          pipeline: [
-            {
-              $match: {
-                $expr: {
-                  $or: [
-                    { $eq: ["$_id", "$$depTourId"] },
-                    { $eq: ["$_id", "$$directTourId"] }
-                  ]
-                }
-              }
-            }
-          ],
-          as: "tour",
-        },
-      },
-      {
-        $addFields: {
-          tourTitle: { $arrayElemAt: ["$tour.title", 0] },
-          startDate: { $arrayElemAt: ["$departure.startDate", 0] },
-          endDate: { $arrayElemAt: ["$departure.endDate", 0] },
-          isDeparture: { $gt: [{ $size: "$departure" }, 0] },
-        },
-      },
-      {
-        $project: {
-          tour: 0,
-          departure: 0,
-        },
-      },
-    ]);
-
-    res.json({ total: threads.length, data: threads });
-  } catch (err) {
-    res.status(500).json({ message: err.message });
-  }
-};

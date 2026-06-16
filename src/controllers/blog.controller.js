@@ -79,11 +79,9 @@ export const listPublicPosts = async (req, res) => {
   const { q, tag, category } = req.query;
 
   const filter = {
-    $or: [{ status: "published", privacy: "public" }]
+    status: "published",
+    privacy: "public"
   };
-  if (req.user) {
-    filter.$or.push({ authorId: req.user.id, authorModel: "User" });
-  }
   if (q && q.trim()) {
     const regex = new RegExp(q.trim(), "i");
     filter.$and = filter.$and || [];

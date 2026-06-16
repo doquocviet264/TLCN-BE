@@ -91,7 +91,10 @@ export const getDashboardStats = async (req, res) => {
       topDestinations,
       bookingStatusData,
       topRevenueTours,
-      newUsersThisMonth
+      newUsersThisMonth,
+      actionRequiredBookings,
+      upcomingDepartures,
+      recentReviews
     ] = await Promise.all([
       // Basic counts
       User.countDocuments({ status: 'y' }),
@@ -100,13 +103,13 @@ export const getDashboardStats = async (req, res) => {
       Review.countDocuments(),
       BlogPost.countDocuments(),
 
-      // Active departures (confirmed + in_progress)
-      TourDeparture.countDocuments({ status: { $in: ['confirmed', 'in_progress'] } }),
+      // Active tours
+      Tour.countDocuments({ status: 'active' }),
 
       // Monthly bookings
       Booking.countDocuments({
         createdAt: { $gte: startOfMonth },
-        bookingStatus: { $ne: 'x' }
+        bookingStatus: { $ne: 'cancelled' }
       }),
 
       // Yearly revenue
@@ -114,7 +117,7 @@ export const getDashboardStats = async (req, res) => {
         {
           $match: {
             createdAt: { $gte: startOfYear },
-            bookingStatus: 'c'
+            bookingStatus: { $in: ['confirmed', 'completed'] }
           }
         },
         {
@@ -126,7 +129,7 @@ export const getDashboardStats = async (req, res) => {
       ]),
 
       // Recent bookings
-      Booking.find({ bookingStatus: { $ne: 'x' } })
+      Booking.find({ bookingStatus: { $ne: 'cancelled' } })
         .populate('userId', 'fullName email')
         .populate('tourDepartureId', 'startDate endDate status')
         .sort({ createdAt: -1 })
@@ -135,7 +138,7 @@ export const getDashboardStats = async (req, res) => {
 
       // Popular tours (most bookings)
       Booking.aggregate([
-        { $match: { bookingStatus: { $ne: 'x' } } },
+        { $match: { bookingStatus: { $ne: 'cancelled' } } },
         {
           $group: {
             _id: '$tourDepartureId',
@@ -180,7 +183,7 @@ export const getDashboardStats = async (req, res) => {
         {
           $match: {
             createdAt: { $gte: startOfYear },
-            bookingStatus: 'c'
+            bookingStatus: { $in: ['confirmed', 'completed'] }
           }
         },
         {
@@ -198,7 +201,7 @@ export const getDashboardStats = async (req, res) => {
         {
           $match: {
             createdAt: { $gte: startOfYear },
-            bookingStatus: { $ne: 'x' }
+            bookingStatus: { $ne: 'cancelled' }
           }
         },
         {
@@ -213,7 +216,7 @@ export const getDashboardStats = async (req, res) => {
 
       // Top destinations by booking count
       Booking.aggregate([
-        { $match: { bookingStatus: { $ne: 'x' } } },
+        { $match: { bookingStatus: { $ne: 'cancelled' } } },
         {
           $lookup: {
             from: 'tbl_tour_departures',
@@ -258,7 +261,7 @@ export const getDashboardStats = async (req, res) => {
 
       // Top revenue tours
       Booking.aggregate([
-        { $match: { bookingStatus: 'c' } },
+        { $match: { bookingStatus: { $in: ['confirmed', 'completed'] } } },
         {
           $lookup: {
             from: 'tbl_tour_departures',
@@ -295,7 +298,37 @@ export const getDashboardStats = async (req, res) => {
       User.countDocuments({
         createdAt: { $gte: startOfMonth },
         status: 'y'
+      }),
+
+      // Action required bookings (Pending)
+      Booking.find({ bookingStatus: 'pending' })
+        .populate('userId', 'fullName email')
+        .populate({
+          path: 'tourDepartureId',
+          select: 'startDate endDate status tourId',
+          populate: { path: 'tourId', select: 'title destination' }
+        })
+        .sort({ createdAt: -1 })
+        .limit(10)
+        .lean(),
+
+      // Upcoming departures (next 14 days)
+      TourDeparture.find({
+        startDate: { $gte: now, $lte: new Date(now.getTime() + 14 * 24 * 60 * 60 * 1000) },
+        status: { $in: ['pending', 'confirmed'] }
       })
+        .populate('tourId', 'title destination')
+        .populate('leaderId', 'fullName')
+        .sort({ startDate: 1 })
+        .lean(),
+
+      // Recent reviews
+      Review.find()
+        .populate('userId', 'fullName avatar')
+        .populate('tourId', 'title')
+        .sort({ createdAt: -1 })
+        .limit(5)
+        .lean()
     ]);
 
     // Format monthly revenue for chart (fill all 12 months)
@@ -328,12 +361,15 @@ export const getDashboardStats = async (req, res) => {
       cancelled: { count: 0, revenue: 0 }
     };
     bookingStatusData.forEach(item => {
-      if (item._id === 'c') {
-        bookingStatusStats.confirmed = { count: item.count, revenue: item.revenue };
-      } else if (item._id === 'p') {
-        bookingStatusStats.pending = { count: item.count, revenue: item.revenue };
-      } else if (item._id === 'x') {
-        bookingStatusStats.cancelled = { count: item.count, revenue: item.revenue };
+      if (item._id === 'confirmed' || item._id === 'completed') {
+        bookingStatusStats.confirmed.count += item.count;
+        bookingStatusStats.confirmed.revenue += item.revenue;
+      } else if (item._id === 'pending') {
+        bookingStatusStats.pending.count += item.count;
+        bookingStatusStats.pending.revenue += item.revenue;
+      } else if (item._id === 'cancelled') {
+        bookingStatusStats.cancelled.count += item.count;
+        bookingStatusStats.cancelled.revenue += item.revenue;
       }
     });
 
@@ -396,6 +432,37 @@ export const getDashboardStats = async (req, res) => {
         destination: t.destination,
         revenue: t.revenue,
         bookings: t.bookings
+      })),
+      actionRequiredBookings: actionRequiredBookings.map(booking => ({
+        _id: booking._id,
+        userInfo: booking.userId ? {
+          fullName: booking.userId.fullName,
+          email: booking.userId.email
+        } : { fullName: booking.fullName, email: booking.email },
+        tourInfo: booking.tourDepartureId && booking.tourDepartureId.tourId ? {
+          title: booking.tourDepartureId.tourId.title,
+          destination: booking.tourDepartureId.tourId.destination
+        } : null,
+        totalPrice: booking.totalPrice,
+        numGuests: booking.numAdults + booking.numChildren,
+        createdAt: booking.createdAt
+      })),
+      upcomingDepartures: upcomingDepartures.map(dep => ({
+        _id: dep._id,
+        tour: dep.tourId ? { title: dep.tourId.title, destination: dep.tourId.destination } : null,
+        startDate: dep.startDate,
+        leader: dep.leaderId ? dep.leaderId.fullName : null,
+        currentGuests: dep.current_guests || 0,
+        minGuests: dep.min_guests || 0,
+        status: dep.status
+      })),
+      recentReviews: recentReviews.map(r => ({
+        _id: r._id,
+        user: r.userId ? { fullName: r.userId.fullName, avatar: r.userId.avatar } : null,
+        tourTitle: r.tourId ? r.tourId.title : null,
+        rating: r.rating,
+        comment: r.comment,
+        createdAt: r.createdAt
       }))
     };
 

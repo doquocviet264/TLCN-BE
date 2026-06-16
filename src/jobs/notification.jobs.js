@@ -139,7 +139,7 @@ export const registerNotificationJobs = () => {
                type: "review",
                title: "Hãy đánh giá trải nghiệm của bạn",
                content: `Chuyến đi "${d.tourId.title}" đã kết thúc. Hãy để lại đánh giá của bạn để nhận thêm ưu đãi nhé!`,
-               link: `/tours/${d.tourId._id}`,
+               link: `/user/destination/${d.tourId.slug}/${d.tourId._id}`,
                targetType: "user",
                targetUsers: [uId],
                targetTourId: d.tourId._id,

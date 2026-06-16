@@ -1,7 +1,7 @@
 // src/routes/chat.routes.js
 import { Router } from "express";
 // Import thêm optionalAuth
-import { auth, optionalAuth } from "../middleware/auth.js";
+import { auth, optionalAuth, adminOnly } from "../middleware/auth.js";
 import {
   // booking chat
   getBookingMessages,
@@ -10,13 +10,12 @@ import {
   startSupportChat,
   getSupportMessages,
   sendSupportMessage,
-  // tour group
-  getTourGroupMessages,
-  sendTourGroupMessage,
+  getUserSupportChats,
+  getUserChatHistory,
   // admin
   getAllSupportChats,
   getAllBookingChats,
-  getAllTourChats,
+  closeSupportChat,
 } from "../controllers/chat.controller.js";
 
 const router = Router();
@@ -35,13 +34,13 @@ router.get("/support/:supportId", optionalAuth, getSupportMessages);
 
 router.post("/support/:supportId", optionalAuth, sendSupportMessage);
 
-/* ========== TOUR GROUP CHAT (Bắt buộc Auth) ========== */
-router.get("/tour/:tourId", auth, getTourGroupMessages);
-router.post("/tour/:tourId", auth, sendTourGroupMessage);
+/* ========== USER CHAT HISTORY ========== */
+router.get("/user/support", optionalAuth, getUserSupportChats);
+router.get("/user/history", optionalAuth, getUserChatHistory);
 
 /* ========== ADMIN APIs (Bắt buộc Auth) ========== */
-router.get("/admin/support", auth, getAllSupportChats);
-router.get("/admin/bookings", auth, getAllBookingChats);
-router.get("/admin/tours", auth, getAllTourChats);
+router.get("/admin/support", auth, adminOnly, getAllSupportChats);
+router.patch("/admin/support/:supportId/close", auth, adminOnly, closeSupportChat);
+router.get("/admin/bookings", auth, adminOnly, getAllBookingChats);
 
 export default router;

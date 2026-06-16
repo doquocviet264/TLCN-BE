@@ -134,7 +134,7 @@ export const verifyEmail = async (req, res) => {
       type: "system",
       title: "Chào mừng bạn đến với Travela!",
       content: `Chúc mừng bạn đã trở thành thành viên của Travela. Hãy bắt đầu khám phá những chuyến đi tuyệt vời cùng chúng tôi nhé.`,
-      link: `/tours`,
+      link: `/user/tours`,
       targetType: "user",
       targetUsers: [user._id],
     }).catch(console.error);
