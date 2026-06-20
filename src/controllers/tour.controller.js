@@ -362,3 +362,84 @@ export const searchTours = async (req, res) => {
     res.status(500).json({ message: err.message });
   }
 };
+
+// GET /api/tours/popular?limit=6
+// Trả về danh sách tour được đặt nhiều nhất (join booking qua departure)
+export const getPopularTours = async (req, res) => {
+  try {
+    const limit = Math.min(parseInt(req.query.limit || "6", 10), 20);
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    const pipeline = [
+      // 1. Tổng hợp booking count theo tourId qua departure
+      {
+        $lookup: {
+          from: "tbl_tour_departures",
+          localField: "_id",
+          foreignField: "tourId",
+          as: "departures",
+        },
+      },
+      { $unwind: { path: "$departures", preserveNullAndEmptyArrays: true } },
+      {
+        $lookup: {
+          from: "tbl_booking",
+          let: { depId: "$departures._id" },
+          pipeline: [
+            {
+              $match: {
+                $expr: { $eq: ["$tourDepartureId", "$$depId"] },
+                bookingStatus: { $in: ["confirmed", "completed", "pending"] },
+              },
+            },
+          ],
+          as: "bookings",
+        },
+      },
+      {
+        $group: {
+          _id: "$_id",
+          title:        { $first: "$title" },
+          destination:  { $first: "$destination" },
+          destinationSlug: { $first: "$destinationSlug" },
+          priceAdult:   { $first: "$priceAdult" },
+          salePrice:    { $first: "$salePrice" },
+          discountPercent: { $first: "$discountPercent" },
+          images:       { $first: "$images" },
+          time:         { $first: "$time" },
+          status:       { $first: "$status" },
+          bookingCount: { $sum: { $size: "$bookings" } },
+        },
+      },
+      { $match: { status: "active" } },
+      { $sort: { bookingCount: -1, _id: 1 } },
+      { $limit: limit },
+      // 2. Lấy thêm upcomingDepartures
+      {
+        $lookup: {
+          from: "tbl_tour_departures",
+          let: { tourId: "$_id" },
+          pipeline: [
+            {
+              $match: {
+                $expr: { $eq: ["$tourId", "$$tourId"] },
+                startDate: { $gte: today },
+                status:    { $ne: "closed" },
+              },
+            },
+            { $sort: { startDate: 1 } },
+            { $limit: 5 },
+            { $project: { _id: 1, startDate: 1, max_guests: 1, current_guests: 1, priceAdult: 1 } },
+          ],
+          as: "upcomingDepartures",
+        },
+      },
+    ];
+
+    const data = await Tour.aggregate(pipeline);
+    res.json({ data });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+};

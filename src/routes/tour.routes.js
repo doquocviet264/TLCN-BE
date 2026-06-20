@@ -6,7 +6,8 @@ import {
   updateTour,
   deleteTour,
   searchTours,
-  suggestDestinations
+  suggestDestinations,
+  getPopularTours,
 } from "../controllers/tour.controller.js";
 import { listDepartures, getDepartureById } from "../controllers/departure.controller.js";
 import { getAllTours, getTourByIdAdmin, createTourAdmin, updateTourAdmin, deleteTourAdmin, getTourTimes } from "../controllers/admin.controller.js";
@@ -114,6 +115,7 @@ const router = Router();
  *               items: { type: string, example: "Hạ Long" }
  */
 router.get("/suggest", suggestDestinations);
+router.get("/popular", getPopularTours);
 router.get("/departures/:id", getDepartureById);
 router.get("/:tourId/departures", listDepartures);
 
