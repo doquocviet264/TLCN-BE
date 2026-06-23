@@ -105,7 +105,8 @@ export const listPublicPosts = async (req, res) => {
   }
   if (category) {
     filter.$and = filter.$and || [];
-    filter.$and.push({ categories: category });
+    // Dùng regex case-insensitive để khớp với tên danh mục tiếng Việt
+    filter.$and.push({ categories: new RegExp(`^${category.trim()}$`, "i") });
   }
 
   const [data, total, totalComments, allAuthorsResult] = await Promise.all([
