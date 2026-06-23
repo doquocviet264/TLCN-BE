@@ -13,7 +13,7 @@ const SEPAY_API_KEY = process.env.SEPAY_API_KEY || "";
 const SEPAY_BANK_CODE = process.env.SEPAY_BANK_CODE || "VCB"; // Vietcombank default
 const SEPAY_ACCOUNT_NO = process.env.SEPAY_ACCOUNT_NO || "";
 const SEPAY_ACCOUNT_NAME = process.env.SEPAY_ACCOUNT_NAME || "";
-const FRONTEND_URL = process.env.FRONTEND_URL || "http://localhost:5173";
+const FRONTEND_URL = process.env.FRONTEND_URL || "http://localhost:3000";
 
 /**
  * Tạo URL QR thanh toán Sepay

@@ -1,0 +1,88 @@
+services:
+  - type: web
+    name: tlcn-be
+    runtime: node
+    plan: free
+    region: singapore
+    buildCommand: npm install
+    startCommand: node server.js
+    healthCheckPath: /healthz
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 4000
+      - key: MONGODB_URI
+        sync: false
+      - key: JWT_SECRET
+        sync: false
+      - key: JWT_EXPIRES
+        value: 7d
+      - key: APP_TIMEZONE
+        value: Asia/Ho_Chi_Minh
+      - key: CORS_ORIGINS
+        sync: false
+      - key: FRONTEND_URL
+        sync: false
+      - key: BASE_URL
+        sync: false
+      - key: RECOMMENDATION_API
+        sync: false
+      - key: SMTP_HOST
+        sync: false
+      - key: SMTP_PORT
+        sync: false
+      - key: SMTP_USER
+        sync: false
+      - key: SMTP_PASS
+        sync: false
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false
+      - key: GOOGLE_CALLBACK_URL
+        sync: false
+      - key: VNP_TMNCODE
+        sync: false
+      - key: VNP_HASHSECRET
+        sync: false
+      - key: VNP_URL
+        sync: false
+      - key: VNP_RETURN_URL
+        sync: false
+      - key: SEPAY_MERCHANT_ID
+        sync: false
+      - key: SEPAY_API_KEY
+        sync: false
+      - key: SEPAY_BANK_CODE
+        value: VCB
+      - key: SEPAY_ACCOUNT_NO
+        sync: false
+      - key: SEPAY_ACCOUNT_NAME
+        sync: false
+      - key: MOMO_PARTNER_CODE
+        value: MOMO
+      - key: MOMO_ACCESS_KEY
+        sync: false
+      - key: MOMO_SECRET_KEY
+        sync: false
+      - key: MOMO_API
+        sync: false
+      - key: MOMO_REDIRECT_URL
+        sync: false
+      - key: MOMO_IPN_URL
+        sync: false
+      - key: BOOKING_DEPOSIT_RATE
+        value: "0.2"
+      - key: CLOUDINARY_CLOUD_NAME
+        sync: false
+      - key: CLOUDINARY_API_KEY
+        sync: false
+      - key: CLOUDINARY_API_SECRET
+        sync: false
+      - key: CLOUDINARY_FOLDER
+        value: travela/avatars
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: CHATBOT_MODEL
+        value: claude-haiku-4-5-20251001
