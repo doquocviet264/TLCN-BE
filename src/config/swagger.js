@@ -9,7 +9,7 @@ export const swaggerSpec = swaggerJSDoc({
       description: "API documentation for Travela Booking Tour",
     },
     servers: [
-      { url: "http://localhost:4000" }
+      { url: process.env.API_BASE_URL || process.env.BASE_URL || "http://localhost:4000" }
     ],
     components: {
       securitySchemes: {

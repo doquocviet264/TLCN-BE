@@ -49,8 +49,7 @@ const voucherSchema = new mongoose.Schema(
   }
 );
 
-// Index để truy vấn nhanh mã voucher
-voucherSchema.index({ code: 1 });
+// Lưu ý: index { code: 1 } đã được tạo tự động bởi unique: true ở trên, không cần khai báo lại.
 // Index tự động ẩn các voucher hết hạn nếu cần truy vấn nhanh
 voucherSchema.index({ validUntil: 1 });
 

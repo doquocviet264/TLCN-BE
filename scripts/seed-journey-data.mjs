@@ -51,20 +51,9 @@ const TARGET_LOCATIONS = [
   { provinceName: "Cà Mau", source: "manual", count: 1 },
 ];
 
-const TARGET_ALIAS_LOCATIONS = [
-  { provinceName: "Quảng Nam", source: "manual", count: 1 },
-  { provinceName: "Bình Dương", source: "tour", count: 1 },
-  { provinceName: "Bà Rịa - Vũng Tàu", source: "manual", count: 1 },
-  { provinceName: "Bình Thuận", source: "manual", count: 1 },
-  { provinceName: "Sóc Trăng", source: "tour", count: 1 },
-  { provinceName: "Hậu Giang", source: "manual", count: 1 },
-  { provinceName: "Bến Tre", source: "manual", count: 1 },
-  { provinceName: "Kiên Giang", source: "tour", count: 1 },
-  { provinceName: "Ninh Thuận", source: "manual", count: 1 },
-  { provinceName: "Hà Giang", source: "manual", count: 1 },
-  { provinceName: "Yên Bái", source: "tour", count: 1 },
-  { provinceName: "Quảng Bình", source: "manual", count: 1 },
-];
+// TARGET_ALIAS_LOCATIONS đã bị xóa sau khi cập nhật sang 34 tỉnh mới (2025).
+// Các tên cũ (Quảng Nam, Bình Dương, Yên Bái, Hà Giang...) không còn được seed.
+const TARGET_ALIAS_LOCATIONS = [];
 
 const COMMUNITY_LOCATIONS = [
   { provinceName: "Hà Nội", source: "tour", count: 1 },
