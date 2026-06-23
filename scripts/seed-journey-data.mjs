@@ -145,9 +145,15 @@ function sourceForMemory(progressSource, memoryIndex) {
   return memoryIndex % 2 === 0 ? "tour" : "manual";
 }
 
+// Trai deu trong ~2 nam gan day, luon nho hon "hom nay" - khong de globalIndex
+// (vd userIndex * 100) lam ngay bi day xa ve tuong lai nhu truoc.
+const VISITED_DATE_RANGE_DAYS = 720;
+
 function visitedDate(globalIndex) {
-  const date = new Date(Date.UTC(2024, 0, 8, 9, 0, 0));
-  date.setUTCDate(date.getUTCDate() + globalIndex * 13);
+  const dayOffset = ((globalIndex * 13) % VISITED_DATE_RANGE_DAYS) + 1; // 1..720, luon > 0
+  const date = new Date();
+  date.setUTCHours(9, 0, 0, 0);
+  date.setUTCDate(date.getUTCDate() - dayOffset);
   return date;
 }
 

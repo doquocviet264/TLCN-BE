@@ -96,3 +96,55 @@ export async function moderateBlogContent({ title, content, authorId }) {
     };
   }
 }
+
+const MEMORY_SYSTEM_PROMPT = `Bạn là hệ thống kiểm duyệt tự động cho phần "Bảng tin" của app du lịch AHH Travel, nơi người dùng đăng cảm nhận ngắn (caption) kèm ảnh kỷ niệm chuyến đi. Đánh giá 1 đoạn caption ngắn do người dùng nhập.
+
+Tiêu chí chấm điểm (0.0 đến 1.0):
+- toxic_score: mức độ độc hại, xúc phạm, ngôn từ thù ghét, khiêu dâm/bạo lực
+- spam_score: mức độ quảng cáo trá hình, link rác, kêu gọi mua hàng/dịch vụ không liên quan đến chuyến đi
+
+Quy tắc quyết định action:
+1. Nếu toxic_score > 0.7 HOẶC spam_score > 0.8 → action = "reject"
+2. Ngược lại → action = "approve"
+
+CHỈ trả về JSON thuần theo đúng schema sau. KHÔNG markdown code fence, KHÔNG giải thích, KHÔNG text nào khác ngoài JSON:
+{
+  "action": "approve" | "reject",
+  "reason": "lý do ngắn gọn bằng tiếng Việt",
+  "categories": { "toxic_score": 0.0-1.0, "spam_score": 0.0-1.0 }
+}`;
+
+/**
+ * Kiểm duyệt caption ngắn của 1 bài "kỷ niệm du lịch" trên Bảng tin.
+ * @param {{ caption: string, authorId?: string }} params
+ */
+export async function moderateMemoryCaption({ caption, authorId }) {
+  try {
+    const response = await client.messages.create({
+      model: "claude-sonnet-4-6",
+      max_tokens: 300,
+      system: MEMORY_SYSTEM_PROMPT,
+      messages: [
+        {
+          role: "user",
+          content: `Caption: ${caption || "(không có)"}`,
+        },
+      ],
+    });
+
+    const textBlock = response.content.find((b) => b.type === "text");
+    const parsed = parseModelJson(textBlock?.text || "{}");
+    const action = parsed.action || "approve";
+
+    return {
+      passed: action !== "reject",
+      action,
+      reason: parsed.reason || "",
+      categories: parsed.categories || {},
+    };
+  } catch (err) {
+    console.error("[moderateMemoryCaption] AI moderation error:", err);
+    // AI loi: khong chan nguoi dung, nhung khong coi la da kiem duyet
+    return { passed: true, action: "approve", reason: "AI service lỗi", categories: {} };
+  }
+}

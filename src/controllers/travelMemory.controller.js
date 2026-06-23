@@ -7,6 +7,7 @@ import { TourDeparture } from "../models/TourDeparture.js";
 import { MemoryLike } from "../models/MemoryLike.js";
 import { MemoryComment } from "../models/MemoryComment.js";
 import cloudinary from "../config/cloudinary.js";
+import { moderateMemoryCaption } from "../services/moderationService.js";
 import {
   findAchievementForProvinceCount,
   findHighestAchievementForProvinceCount,
@@ -21,6 +22,23 @@ const isValidMemoryImages = (images) =>
 const canAccessMemory = (memory, userId) =>
   memory?.privacy === "public" ||
   memory?.userId?.toString() === userId?.toString();
+
+const MIN_VISITED_AT = new Date("2000-01-01T00:00:00.000Z");
+
+// Khong cho "ngay di" trong tuong lai (chua di thi chua co gi de ghi lai
+// ky niem), va chan luon cac gia tri qua xa trong qua khu do nhap sai.
+const isValidVisitedAt = (visitedAt) => {
+  const date = new Date(visitedAt);
+  if (Number.isNaN(date.getTime())) return false;
+  return date <= new Date() && date >= MIN_VISITED_AT;
+};
+
+// Kiem duyet caption ngan tren Bang tin: chi chay khi bai cong khai va co
+// caption, vi bai private chi tac gia xem duoc nen khong can chan gat gao.
+const checkMemoryCaptionModeration = async (caption, privacy, authorId) => {
+  if (privacy !== "public" || !caption || !caption.trim()) return { passed: true };
+  return moderateMemoryCaption({ caption, authorId });
+};
 
 const uploadImageBuffer = (file, folder) =>
   new Promise((resolve, reject) => {
@@ -118,6 +136,22 @@ export const createMemory = async (req, res) => {
       });
     }
 
+    if (!isValidVisitedAt(visitedAt)) {
+      return res.status(400).json({
+        success: false,
+        message: "Ngày đi không hợp lệ: không được ở trong tương lai hoặc quá xa trong quá khứ.",
+      });
+    }
+
+    const moderation = await checkMemoryCaptionModeration(caption, privacy || "private", userId);
+    if (!moderation.passed) {
+      return res.status(422).json({
+        success: false,
+        message: "Cảm nhận vi phạm tiêu chuẩn cộng đồng, vui lòng chỉnh sửa lại.",
+        reason: moderation.reason,
+      });
+    }
+
     // Tạo Kỷ niệm mới
     const memory = new TravelMemory({
       userId,
@@ -191,6 +225,22 @@ export const createMemoryFromBooking = async (req, res) => {
         success: false,
         message:
           "Vui lòng cung cấp đủ thông tin: visitedAt, images (1-3 ảnh)",
+      });
+    }
+
+    if (!isValidVisitedAt(visitedAt)) {
+      return res.status(400).json({
+        success: false,
+        message: "Ngày đi không hợp lệ: không được ở trong tương lai hoặc quá xa trong quá khứ.",
+      });
+    }
+
+    const moderation = await checkMemoryCaptionModeration(caption, privacy || "private", userId);
+    if (!moderation.passed) {
+      return res.status(422).json({
+        success: false,
+        message: "Cảm nhận vi phạm tiêu chuẩn cộng đồng, vui lòng chỉnh sửa lại.",
+        reason: moderation.reason,
       });
     }
 
@@ -508,19 +558,30 @@ export const updateMemory = async (req, res) => {
       return res.status(403).json({ success: false, message: "Bạn không có quyền sửa bài viết này" });
     }
 
-    if (caption !== undefined) {
-      if (caption.length > 500) {
-        return res.status(400).json({ success: false, message: "Cảm nhận tối đa 500 ký tự" });
-      }
-      memory.caption = caption;
+    if (caption !== undefined && caption.length > 500) {
+      return res.status(400).json({ success: false, message: "Cảm nhận tối đa 500 ký tự" });
     }
 
-    if (privacy !== undefined) {
-      if (!["public", "private"].includes(privacy)) {
-        return res.status(400).json({ success: false, message: "Chế độ hiển thị không hợp lệ" });
-      }
-      memory.privacy = privacy;
+    if (privacy !== undefined && !["public", "private"].includes(privacy)) {
+      return res.status(400).json({ success: false, message: "Chế độ hiển thị không hợp lệ" });
     }
+
+    const nextCaption = caption !== undefined ? caption : memory.caption;
+    const nextPrivacy = privacy !== undefined ? privacy : memory.privacy;
+
+    // Sua caption hoac chuyen sang cong khai deu can kiem duyet lai, vi
+    // bai co the duoc tao private (khong kiem duyet) roi moi doi sang public.
+    const moderation = await checkMemoryCaptionModeration(nextCaption, nextPrivacy, userId);
+    if (!moderation.passed) {
+      return res.status(422).json({
+        success: false,
+        message: "Cảm nhận vi phạm tiêu chuẩn cộng đồng, vui lòng chỉnh sửa lại.",
+        reason: moderation.reason,
+      });
+    }
+
+    memory.caption = nextCaption;
+    memory.privacy = nextPrivacy;
 
     await memory.save();
 
