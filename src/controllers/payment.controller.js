@@ -5,7 +5,7 @@ import { Tour } from "../models/Tour.js"; // nếu muốn update current_guests
 import { buildVNPayPayUrl, verifyVNPayChecksum } from "../utils/vnpay.js";
 import { Notification } from "../models/Notification.js";
 
-const FRONTEND_URL = process.env.FRONTEND_URL || "http://localhost:3000";
+const FRONTEND_URL = (process.env.FRONTEND_URL || "http://localhost:3000").replace(/\/+$/, "");
 const API_BASE_URL = process.env.API_BASE_URL || "http://localhost:4000";
 
 /** Helper: lấy IP client */

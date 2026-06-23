@@ -138,7 +138,9 @@ router.get(
   "/google/callback",
   passport.authenticate("google", { failureRedirect: "/login" }),
   (req, res) => {
-    const FRONTEND_URL = process.env.FRONTEND_URL || "http://localhost:3000";
+    const FRONTEND_URL = (
+      process.env.FRONTEND_URL || "http://localhost:3000"
+    ).replace(/\/+$/, "");
 
     // Đăng nhập thành công → cấp JWT rồi đưa người dùng quay về frontend
     // (route cũ trả thẳng JSON nên trình duyệt bị kẹt ở trang API thuần)
