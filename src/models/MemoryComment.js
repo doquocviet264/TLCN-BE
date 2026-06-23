@@ -20,6 +20,14 @@ const memoryCommentSchema = new mongoose.Schema(
       trim: true,
       maxlength: 500,
     },
+    // Chi cho phep reply 1 cap: luon tro thang ve comment goc (root),
+    // khong bao gio tro vao 1 comment khac cung la reply.
+    parentCommentId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "MemoryComment",
+      default: null,
+      index: true,
+    },
   },
   { timestamps: true }
 );

@@ -50,6 +50,10 @@ const travelMemorySchema = new mongoose.Schema(
     isVerifiedByTour: { type: Boolean, default: false },
     likesCount: { type: Number, default: 0 },
     commentsCount: { type: Number, default: 0 },
+    sharesCount: { type: Number, default: 0 },
+    // Id thanh tuu (xem PROVINCE_ACHIEVEMENTS) ma user vua dat duoc nho ky
+    // niem nay, de hien thi noi bat tren ban tin va khuyen khich check-in
+    earnedAchievementId: { type: String, default: null },
   },
   { timestamps: true }
 );
@@ -64,7 +68,7 @@ travelMemorySchema.pre("save", function (next) {
 
 // Đánh chỉ mục để tối ưu truy vấn timeline và newsfeed
 travelMemorySchema.index({ userId: 1, visitedAt: -1 });
-travelMemorySchema.index({ privacy: 1, visitedAt: -1 }); // Cho newsfeed cộng đồng
+travelMemorySchema.index({ privacy: 1, createdAt: -1 }); // Cho newsfeed cộng đồng (sort theo thời điểm chia sẻ)
 
 export const TravelMemory = mongoose.model(
   "TravelMemory",

@@ -1,10 +1,16 @@
+import mongoose from "mongoose";
 import { TravelMemory } from "../models/TravelMemory.js";
+import { User } from "../models/User.js";
 import { ProvinceProgress } from "../models/ProvinceProgress.js";
 import { Booking } from "../models/Booking.js";
 import { TourDeparture } from "../models/TourDeparture.js";
 import { MemoryLike } from "../models/MemoryLike.js";
 import { MemoryComment } from "../models/MemoryComment.js";
 import cloudinary from "../config/cloudinary.js";
+import {
+  findAchievementForProvinceCount,
+  findHighestAchievementForProvinceCount,
+} from "../constants/achievements.js";
 
 const hasObjectId = (items = [], id) =>
   items.some((item) => item?.toString() === id?.toString());
@@ -146,7 +152,14 @@ export const createMemory = async (req, res) => {
       await progress.save();
       provinceUnlocked = true;
 
-      // Tính điểm thưởng hoặc logic khác nếu cần thiết ở đây
+      // Tinh xem co vua dat moc thanh tuu nao khong, de gan vao ky niem
+      // nay va hien thi noi bat tren ban tin (khuyen khich nguoi khac check-in)
+      const totalProvinces = await ProvinceProgress.countDocuments({ userId });
+      const achievement = findAchievementForProvinceCount(totalProvinces);
+      if (achievement) {
+        memory.earnedAchievementId = achievement.id;
+        await memory.save();
+      }
     }
 
     if (existingProgress && memory.source === "manual" && existingProgress.source === "tour") {
@@ -241,6 +254,13 @@ export const createMemoryFromBooking = async (req, res) => {
       });
       await progress.save();
       provinceUnlocked = true;
+
+      const totalProvinces = await ProvinceProgress.countDocuments({ userId });
+      const achievement = findAchievementForProvinceCount(totalProvinces);
+      if (achievement) {
+        memory.earnedAchievementId = achievement.id;
+        await memory.save();
+      }
     } else {
       if (progress.source === "manual") progress.source = "both";
       if (!hasObjectId(progress.completedBookingIds, booking._id)) {
@@ -275,9 +295,12 @@ export const getPublicMemories = async (req, res) => {
       query.provinceName = province;
     }
 
+    // Bảng tin cộng đồng phải theo thời điểm CHIA SẺ (createdAt), không phải
+    // ngày đi (visitedAt) do user tự chọn — nếu không, bài vừa đăng có thể
+    // bị chìm xuống dưới các bài có ngày đi gần hơn nhưng đăng từ lâu.
     const memories = await TravelMemory.find(query)
       .populate("userId", "fullName avatar")
-      .sort({ visitedAt: -1 })
+      .sort({ createdAt: -1 })
       .skip((page - 1) * limit)
       .limit(parseInt(limit))
       .lean();
@@ -298,6 +321,24 @@ export const getPublicMemories = async (req, res) => {
       });
     }
 
+    // Gan danh hieu hien tai (cap bac cao nhat) cua nguoi dang bai, de
+    // hien thi nho canh ten tren ban tin, vd "Lữ khách mới"
+    const posterIds = [...new Set(memories.map((m) => m.userId?._id?.toString()).filter(Boolean))];
+    if (posterIds.length) {
+      const provinceCounts = await ProvinceProgress.aggregate([
+        { $match: { userId: { $in: posterIds.map((id) => new mongoose.Types.ObjectId(id)) } } },
+        { $group: { _id: "$userId", count: { $sum: 1 } } },
+      ]);
+      const countByUserId = new Map(provinceCounts.map((p) => [p._id.toString(), p.count]));
+
+      memories.forEach((m) => {
+        const posterId = m.userId?._id?.toString();
+        const count = posterId ? countByUserId.get(posterId) || 0 : 0;
+        const posterAchievement = findHighestAchievementForProvinceCount(count);
+        m.posterAchievementId = posterAchievement?.id || null;
+      });
+    }
+
     res.status(200).json({
       success: true,
       data: memories,
@@ -310,6 +351,211 @@ export const getPublicMemories = async (req, res) => {
     });
   } catch (error) {
     console.error("Error in getPublicMemories:", error);
+    res.status(500).json({ success: false, message: "Lỗi máy chủ", error: error.message });
+  }
+};
+
+// Lấy 1 kỷ niệm theo id (dùng cho deep-link mở đúng bài từ link share)
+export const getMemoryById = async (req, res) => {
+  try {
+    const userId = req.user?.id;
+    const { id: memoryId } = req.params;
+
+    const memory = await TravelMemory.findById(memoryId)
+      .populate("userId", "fullName avatar")
+      .lean();
+
+    if (!memory) {
+      return res.status(404).json({ success: false, message: "Không tìm thấy bài viết" });
+    }
+
+    if (!canAccessMemory(memory, userId)) {
+      return res.status(403).json({
+        success: false,
+        message: "Bạn không có quyền xem bài viết này",
+      });
+    }
+
+    if (userId) {
+      const existingLike = await MemoryLike.findOne({ userId, memoryId });
+      memory.isLikedByMe = !!existingLike;
+    }
+
+    const posterId = memory.userId?._id?.toString();
+    if (posterId) {
+      const count = await ProvinceProgress.countDocuments({ userId: posterId });
+      const posterAchievement = findHighestAchievementForProvinceCount(count);
+      memory.posterAchievementId = posterAchievement?.id || null;
+    }
+
+    res.status(200).json({ success: true, data: memory });
+  } catch (error) {
+    console.error("Error in getMemoryById:", error);
+    res.status(500).json({ success: false, message: "Lỗi máy chủ", error: error.message });
+  }
+};
+
+// Chia se nhe: chi tang luot chia se + tra ve link, khong dang lai bai moi
+export const shareMemory = async (req, res) => {
+  try {
+    const userId = req.user?.id;
+    const { id: memoryId } = req.params;
+
+    const memory = await TravelMemory.findById(memoryId).select("userId privacy sharesCount");
+    if (!memory) {
+      return res.status(404).json({ success: false, message: "Không tìm thấy bài viết" });
+    }
+
+    if (!canAccessMemory(memory, userId)) {
+      return res.status(403).json({
+        success: false,
+        message: "Bạn không có quyền chia sẻ bài viết này",
+      });
+    }
+
+    const updated = await TravelMemory.findByIdAndUpdate(
+      memoryId,
+      { $inc: { sharesCount: 1 } },
+      { new: true }
+    ).select("sharesCount");
+
+    res.status(200).json({
+      success: true,
+      message: "Đã chia sẻ",
+      sharesCount: updated.sharesCount,
+    });
+  } catch (error) {
+    console.error("Error in shareMemory:", error);
+    res.status(500).json({ success: false, message: "Lỗi máy chủ", error: error.message });
+  }
+};
+
+// Trang ca nhan cong khai: thong tin nguoi dang + danh hieu cao nhat +
+// danh sach bai cong khai cua ho (dung khi bam vao avatar/ten tren Bang tin)
+export const getUserPublicMemories = async (req, res) => {
+  try {
+    const viewerId = req.user?.id;
+    const { userId } = req.params;
+    const { page = 1, limit = 10 } = req.query;
+
+    const targetUser = await User.findById(userId).select("fullName avatar");
+    if (!targetUser) {
+      return res.status(404).json({ success: false, message: "Không tìm thấy người dùng" });
+    }
+
+    const query = { userId, privacy: "public" };
+
+    const memories = await TravelMemory.find(query)
+      .populate("userId", "fullName avatar")
+      .sort({ createdAt: -1 })
+      .skip((page - 1) * limit)
+      .limit(parseInt(limit))
+      .lean();
+
+    const total = await TravelMemory.countDocuments(query);
+    const totalProvinces = await ProvinceProgress.countDocuments({ userId });
+    const posterAchievement = findHighestAchievementForProvinceCount(totalProvinces);
+
+    if (viewerId) {
+      const memoryIds = memories.map((m) => m._id);
+      const userLikes = await MemoryLike.find({
+        userId: viewerId,
+        memoryId: { $in: memoryIds },
+      });
+      const likedMemoryIds = new Set(userLikes.map((l) => l.memoryId.toString()));
+      memories.forEach((m) => {
+        m.isLikedByMe = likedMemoryIds.has(m._id.toString());
+      });
+    }
+
+    memories.forEach((m) => {
+      m.posterAchievementId = posterAchievement?.id || null;
+    });
+
+    res.status(200).json({
+      success: true,
+      user: targetUser,
+      totalProvinces,
+      posterAchievementId: posterAchievement?.id || null,
+      data: memories,
+      pagination: {
+        page: parseInt(page),
+        limit: parseInt(limit),
+        total,
+        totalPages: Math.ceil(total / limit),
+      },
+    });
+  } catch (error) {
+    console.error("Error in getUserPublicMemories:", error);
+    res.status(500).json({ success: false, message: "Lỗi máy chủ", error: error.message });
+  }
+};
+
+// Sua bai: chi cho sua cam nhan (caption) + che do hien thi, giu nguyen
+// anh/tinh/ngay di de khong lam mat tinh xac thuc cua ky niem da dang
+export const updateMemory = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { id: memoryId } = req.params;
+    const { caption, privacy } = req.body;
+
+    const memory = await TravelMemory.findById(memoryId);
+    if (!memory) {
+      return res.status(404).json({ success: false, message: "Không tìm thấy bài viết" });
+    }
+
+    if (memory.userId.toString() !== userId.toString()) {
+      return res.status(403).json({ success: false, message: "Bạn không có quyền sửa bài viết này" });
+    }
+
+    if (caption !== undefined) {
+      if (caption.length > 500) {
+        return res.status(400).json({ success: false, message: "Cảm nhận tối đa 500 ký tự" });
+      }
+      memory.caption = caption;
+    }
+
+    if (privacy !== undefined) {
+      if (!["public", "private"].includes(privacy)) {
+        return res.status(400).json({ success: false, message: "Chế độ hiển thị không hợp lệ" });
+      }
+      memory.privacy = privacy;
+    }
+
+    await memory.save();
+
+    res.status(200).json({ success: true, message: "Đã cập nhật bài viết", memory });
+  } catch (error) {
+    console.error("Error in updateMemory:", error);
+    res.status(500).json({ success: false, message: "Lỗi máy chủ", error: error.message });
+  }
+};
+
+// Xoa bai: chi chu bai (hoac admin), xoa kem comment/like lien quan de
+// khong de lai du lieu mo coi trong DB
+export const deleteMemory = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { id: memoryId } = req.params;
+
+    const memory = await TravelMemory.findById(memoryId);
+    if (!memory) {
+      return res.status(404).json({ success: false, message: "Không tìm thấy bài viết" });
+    }
+
+    const isOwner = memory.userId.toString() === userId.toString();
+    const isAdmin = req.user.role === "admin";
+    if (!isOwner && !isAdmin) {
+      return res.status(403).json({ success: false, message: "Bạn không có quyền xóa bài viết này" });
+    }
+
+    await TravelMemory.findByIdAndDelete(memoryId);
+    await MemoryComment.deleteMany({ memoryId });
+    await MemoryLike.deleteMany({ memoryId });
+
+    res.status(200).json({ success: true, message: "Đã xóa bài viết" });
+  } catch (error) {
+    console.error("Error in deleteMemory:", error);
     res.status(500).json({ success: false, message: "Lỗi máy chủ", error: error.message });
   }
 };
@@ -369,6 +615,7 @@ export const createMemoryComment = async (req, res) => {
     const userId = req.user.id;
     const { id: memoryId } = req.params;
     const content = (req.body.content || "").trim();
+    const { parentCommentId } = req.body;
 
     if (!content) {
       return res.status(400).json({
@@ -398,10 +645,28 @@ export const createMemoryComment = async (req, res) => {
       });
     }
 
+    // Chi ho tro reply 1 cap: neu reply vao 1 reply, tu dong gan ve
+    // comment goc cua no de tranh phat sinh nhieu cap long nhau.
+    let resolvedParentId = null;
+    if (parentCommentId) {
+      const parentComment = await MemoryComment.findOne({
+        _id: parentCommentId,
+        memoryId,
+      }).select("parentCommentId");
+      if (!parentComment) {
+        return res.status(404).json({
+          success: false,
+          message: "Không tìm thấy bình luận đang trả lời",
+        });
+      }
+      resolvedParentId = parentComment.parentCommentId || parentComment._id;
+    }
+
     let comment = await MemoryComment.create({
       memoryId,
       userId,
       content,
+      parentCommentId: resolvedParentId,
     });
 
     await TravelMemory.findByIdAndUpdate(memoryId, {

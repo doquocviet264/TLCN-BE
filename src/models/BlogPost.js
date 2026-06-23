@@ -112,7 +112,27 @@ const blogSchema = new mongoose.Schema({
     default: 0
   },
 
-
+  // Kết quả kiểm duyệt tầng AI (chạy trước khi vào hàng chờ Admin duyệt)
+  moderationMeta: {
+    ai_action: {
+      type: String,
+      enum: ["approve", "reject", "flag_for_review"]
+    },
+    ai_confidence: {
+      type: Number,
+      min: 0,
+      max: 1
+    },
+    ai_reason: {
+      type: String
+    },
+    ai_categories: {
+      type: mongoose.Schema.Types.Mixed
+    },
+    ai_checked_at: {
+      type: Date
+    }
+  },
 
 }, { timestamps: true });
 

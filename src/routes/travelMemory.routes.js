@@ -7,11 +7,16 @@ import {
   createMemory,
   createMemoryFromBooking,
   getPublicMemories,
+  getUserPublicMemories,
+  getMemoryById,
+  updateMemory,
+  deleteMemory,
   getMemoryComments,
   createMemoryComment,
   deleteMemoryComment,
   likeMemory,
   unlikeMemory,
+  shareMemory,
 } from "../controllers/travelMemory.controller.js";
 
 const router = Router();
@@ -35,6 +40,9 @@ router.post(
 // GET /api/travel-memories/public - Lấy timeline cộng đồng
 router.get("/public", auth, getPublicMemories);
 
+// GET /api/travel-memories/profile/:userId - Trang cá nhân công khai của 1 người dùng
+router.get("/profile/:userId", auth, getUserPublicMemories);
+
 // POST /api/travel-memories/:id/like - Thích
 router.get("/:id/comments", auth, getMemoryComments);
 router.post("/:id/comments", auth, createMemoryComment);
@@ -44,5 +52,17 @@ router.post("/:id/like", auth, likeMemory);
 
 // DELETE /api/travel-memories/:id/like - Bỏ thích
 router.delete("/:id/like", auth, unlikeMemory);
+
+// POST /api/travel-memories/:id/share - Chia sẻ nhẹ (tăng lượt chia sẻ)
+router.post("/:id/share", auth, shareMemory);
+
+// PATCH /api/travel-memories/:id - Sửa bài (chỉ caption + privacy)
+router.patch("/:id", auth, updateMemory);
+
+// DELETE /api/travel-memories/:id - Xóa bài viết
+router.delete("/:id", auth, deleteMemory);
+
+// GET /api/travel-memories/:id - Lấy 1 bài theo id (mở từ link chia sẻ)
+router.get("/:id", auth, getMemoryById);
 
 export default router;

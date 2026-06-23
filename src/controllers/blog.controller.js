@@ -4,6 +4,7 @@ import { BlogPost } from "../models/BlogPost.js";
 import { BlogComment } from "../models/BlogComment.js";
 import cloudinary from "../config/cloudinary.js";
 import { Tour } from "../models/Tour.js";
+import { moderateBlogContent } from "../services/moderationService.js";
 
 // GET /api/blog/related-to-tour/:tourId
 // Tìm blog liên quan tới tour dựa trên destination + title (text search)
@@ -76,12 +77,16 @@ async function recalcGlobalRating(blogId) {
 export const listPublicPosts = async (req, res) => {
   const page  = Math.max(parseInt(req.query.page || "1", 10), 1);
   const limit = Math.min(parseInt(req.query.limit || "10", 10), 50);
-  const { q, tag, category } = req.query;
+  const { q, tag, category, authorId } = req.query;
 
   const filter = {
     status: "published",
     privacy: "public"
   };
+  // Loc theo tac gia: dung cho trang ca nhan cong khai cua 1 nguoi dung
+  if (authorId) {
+    filter.authorId = authorId;
+  }
   if (q && q.trim()) {
     const regex = new RegExp(q.trim(), "i");
     filter.$and = filter.$and || [];
@@ -371,6 +376,31 @@ export const createPostUser = async (req, res) => {
       uploadedCoverPublicId = uploadResult.public_id;
     }
 
+    // Tầng 2 AI moderation: chỉ chạy với bài public, bài private bỏ qua vì chỉ tác giả xem được
+    let moderationMeta;
+    if (privacy !== "private") {
+      const modResult = await moderateBlogContent({
+        title,
+        content,
+        authorId: req.user?.id,
+      });
+
+      if (!modResult.passed) {
+        return res.status(422).json({
+          message: "Bài viết vi phạm tiêu chuẩn cộng đồng.",
+          suggestion: modResult.suggestion ?? null,
+        });
+      }
+
+      moderationMeta = {
+        ai_action: modResult.action,
+        ai_confidence: modResult.confidence,
+        ai_reason: modResult.reason,
+        ai_categories: modResult.categories,
+        ai_checked_at: new Date(),
+      };
+    }
+
     const post = new BlogPost({
       title,
       summary,
@@ -385,6 +415,7 @@ export const createPostUser = async (req, res) => {
       locationDetail,
       province,
       ward,
+      moderationMeta,
       status: privacy === "private" ? "published" : "pending" // If private, it can be published immediately. If public, needs approval.
     });
 

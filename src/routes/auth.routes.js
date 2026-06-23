@@ -138,14 +138,30 @@ router.get(
   "/google/callback",
   passport.authenticate("google", { failureRedirect: "/login" }),
   (req, res) => {
-    // Đăng nhập thành công → cấp JWT hoặc set cookie
-    const token = jwt.sign(
-      { id: req.user.userId, role: "user" },
+    const FRONTEND_URL = process.env.FRONTEND_URL || "http://localhost:3000";
+
+    // Đăng nhập thành công → cấp JWT rồi đưa người dùng quay về frontend
+    // (route cũ trả thẳng JSON nên trình duyệt bị kẹt ở trang API thuần)
+    const accessToken = jwt.sign(
+      { id: String(req.user._id), role: "user" },
       process.env.JWT_SECRET,
-      { expiresIn: process.env.JWT_EXPIRES }
+      { expiresIn: process.env.JWT_EXPIRES || "7d" }
     );
-    res.cookie("token", token, { httpOnly: true, sameSite: "lax" });
-    res.json({ message: "Login with Google success", token, user: req.user });
+    const refreshToken = jwt.sign(
+      { id: String(req.user._id), type: "refresh" },
+      process.env.JWT_SECRET,
+      { expiresIn: "30d" }
+    );
+
+    res.cookie("token", accessToken, {
+      httpOnly: true,
+      sameSite: process.env.NODE_ENV === "production" ? "none" : "lax",
+      secure: process.env.NODE_ENV === "production",
+    });
+
+    res.redirect(
+      `${FRONTEND_URL}/auth/oauth-callback?accessToken=${accessToken}&refreshToken=${refreshToken}`
+    );
   }
 );
 
