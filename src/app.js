@@ -1,5 +1,8 @@
 import express from "express";
 import cors from "cors";
+import helmet from "helmet";
+import { rateLimit } from "express-rate-limit";
+import mongoSanitize from "express-mongo-sanitize";
 import cookieParser from "cookie-parser";
 import session from "express-session";
 import passport from "./config/passport.js";
@@ -48,14 +51,21 @@ const ALLOW_ORIGINS = (
 
 app.set("trust proxy", true);
 
+/* =========================
+ *  SECURITY HEADERS (Helmet)
+ * ========================= */
+app.use(
+  helmet({
+    crossOriginResourcePolicy: { policy: "cross-origin" },
+    contentSecurityPolicy: false,
+  }),
+);
+
 app.use(
   cors({
     origin(origin, cb) {
       if (!origin) return cb(null, true);
       if (!isProd) return cb(null, true);
-      {
-        return cb(null, true);
-      }
       if (ALLOW_ORIGINS.includes(origin)) return cb(null, true);
       return cb(new Error("Not allowed by CORS"), false);
     },
@@ -65,8 +75,39 @@ app.use(
   }),
 );
 
-app.use(express.json());
+app.use(express.json({ limit: "10mb" }));
 app.use(cookieParser());
+
+/* =========================
+ *  NOSQL INJECTION PREVENTION
+ * ========================= */
+app.use(mongoSanitize());
+
+/* =========================
+ *  RATE LIMITING
+ * ========================= */
+// General API: 200 req / 15 min per IP
+const generalLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 200,
+  standardHeaders: "draft-8",
+  legacyHeaders: false,
+  message: { message: "Quá nhiều yêu cầu, vui lòng thử lại sau." },
+});
+
+// Auth endpoints: 20 req / 15 min per IP (brute-force protection)
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 20,
+  standardHeaders: "draft-8",
+  legacyHeaders: false,
+  message: { message: "Quá nhiều yêu cầu đăng nhập, vui lòng thử lại sau 15 phút." },
+});
+
+app.use("/api/", generalLimiter);
+app.use("/api/auth/login", authLimiter);
+app.use("/api/auth/register", authLimiter);
+app.use("/api/auth/forgot-password", authLimiter);
 
 /* =========================
  *  SESSION + PASSPORT
