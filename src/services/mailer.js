@@ -1,11 +1,19 @@
-import nodemailer from "nodemailer";
+import { Resend } from "resend";
 
-export const sendMail = async ({ to, subject, html })=>{
-  const transporter = nodemailer.createTransport({
-    host: process.env.SMTP_HOST,
-    port: +process.env.SMTP_PORT,
-    secure: false,
-    auth: { user:process.env.SMTP_USER, pass:process.env.SMTP_PASS }
+const resend = new Resend(process.env.RESEND_API_KEY);
+
+const FROM_ADDRESS =
+  process.env.MAIL_FROM || "AHH Travel <noreply@resend.dev>";
+
+export const sendMail = async ({ to, subject, html }) => {
+  const { error } = await resend.emails.send({
+    from: FROM_ADDRESS,
+    to,
+    subject,
+    html,
   });
-  await transporter.sendMail({ from:`Travela <${process.env.SMTP_USER}>`, to, subject, html });
+
+  if (error) {
+    throw new Error(`Resend error: ${error.message}`);
+  }
 };
