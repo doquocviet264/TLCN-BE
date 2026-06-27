@@ -49,7 +49,7 @@ const ALLOW_ORIGINS = (
   .split(",")
   .map((s) => s.trim());
 
-app.set("trust proxy", true);
+app.set("trust proxy", 1);
 
 /* =========================
  *  SECURITY HEADERS (Helmet)
@@ -81,7 +81,12 @@ app.use(cookieParser());
 /* =========================
  *  NOSQL INJECTION PREVENTION
  * ========================= */
-app.use(mongoSanitize());
+app.use((req, res, next) => {
+  if (req.body) mongoSanitize.sanitize(req.body);
+  if (req.params) mongoSanitize.sanitize(req.params);
+  if (req.query) mongoSanitize.sanitize(req.query);
+  next();
+});
 
 /* =========================
  *  RATE LIMITING

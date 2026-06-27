@@ -6,6 +6,7 @@ import { Leader }        from "../models/Leader.js";
 import { Expense }       from "../models/Expense.js";
 import { Booking }       from "../models/Booking.js";
 import { Notification }  from "../models/Notification.js";
+import { sendMail } from "../services/mailer.js";
 import { unlockProvinceForDeparture } from "../services/journey.service.js";
 
 /* ========================================================
@@ -136,12 +137,124 @@ export const patchDepartureStatus = async (req, res) => {
     if (!ALLOWED.includes(status))
       return res.status(400).json({ message: `status must be one of: ${ALLOWED.join(", ")}` });
 
+    // Lấy trạng thái hiện tại để so sánh
+    const currentDep = await TourDeparture.findById(id).populate("tourId");
+    if (!currentDep) return res.status(404).json({ message: "Departure not found" });
+
+    const oldStatus = currentDep.status;
     const departure = await TourDeparture.findByIdAndUpdate(
       id,
       { $set: { status } },
       { new: true }
     );
-    if (!departure) return res.status(404).json({ message: "Departure not found" });
+
+    // Xử lý tự động hủy đơn và thông báo khi status chuyển thành "closed"
+    if (oldStatus !== "closed" && status === "closed") {
+      const bookings = await Booking.find({
+        tourDepartureId: id,
+        bookingStatus: { $in: ["pending", "confirmed"] }
+      });
+
+      if (bookings.length > 0) {
+        // Cập nhật tất cả các đơn này thành "cancelled"
+        await Booking.updateMany(
+          { _id: { $in: bookings.map(b => b._id) } },
+          { $set: { bookingStatus: "cancelled" } }
+        );
+
+        // Chuẩn bị danh sách gửi thông báo in-app
+        const userIds = [...new Set(bookings.filter(b => b.userId).map(b => b.userId.toString()))];
+        if (userIds.length > 0) {
+          const tourTitle = currentDep.tourId?.title || "Tour của bạn";
+          const startDateStr = new Date(currentDep.startDate).toLocaleDateString("vi-VN");
+
+          await Notification.create({
+            type: "tour",
+            targetType: "user",
+            targetUsers: userIds,
+            title: "Lịch khởi hành bị hủy",
+            content: `Lịch khởi hành ngày ${startDateStr} của ${tourTitle} đã bị hủy. Đơn đặt chỗ của bạn đã được chuyển sang trạng thái Đã Hủy. Hệ thống sẽ liên hệ hoàn tiền sớm nhất nếu bạn đã thanh toán.`,
+            link: "/user/history"
+          });
+        }
+
+        // Gửi email
+        for (const bk of bookings) {
+          if (bk.email) {
+            const tourTitle = currentDep.tourId?.title || "Tour của bạn";
+            const startDateStr = new Date(currentDep.startDate).toLocaleDateString("vi-VN");
+            
+            await sendMail({
+              to: bk.email,
+              subject: `Thông báo hủy lịch khởi hành: ${tourTitle}`,
+              html: `
+                <div style="font-family: Arial, sans-serif; color: #333; line-height: 1.6;">
+                  <h2 style="color: #e65100;">Thông báo Hủy Lịch Khởi Hành</h2>
+                  <p>Kính chào quý khách <b>${bk.fullName || 'Khách hàng'}</b>,</p>
+                  <p>Chúng tôi thành thật xin lỗi phải thông báo rằng lịch khởi hành ngày <b>${startDateStr}</b> cho <b>${tourTitle}</b> đã bị hủy.</p>
+                  <p>Mã đơn đặt chỗ của bạn: <b>${bk.code}</b> đã được chuyển sang trạng thái <b>Đã Hủy</b>.</p>
+                  <p>Nếu quý khách đã tiến hành thanh toán, đội ngũ của chúng tôi sẽ liên hệ để hướng dẫn thủ tục hoàn tiền (100%) trong thời gian sớm nhất.</p>
+                  <p>Mong quý khách thông cảm cho sự bất tiện này.</p>
+                  <br/>
+                  <p>Trân trọng,<br/><b>Ban Quản Trị Hệ Thống Tour</b></p>
+                </div>
+              `
+            }).catch(err => console.error(`Error sending cancel email to ${bk.email}:`, err));
+          }
+        }
+      }
+    }
+
+    // Xử lý tự động thông báo khi status chuyển thành "confirmed"
+    if (oldStatus !== "confirmed" && status === "confirmed") {
+      const bookings = await Booking.find({
+        tourDepartureId: id,
+        bookingStatus: { $in: ["pending", "confirmed"] }
+      });
+
+      if (bookings.length > 0) {
+        // Chuẩn bị danh sách gửi thông báo in-app
+        const userIds = [...new Set(bookings.filter(b => b.userId).map(b => b.userId.toString()))];
+        if (userIds.length > 0) {
+          const tourTitle = currentDep.tourId?.title || "Tour của bạn";
+          const startDateStr = new Date(currentDep.startDate).toLocaleDateString("vi-VN");
+
+          await Notification.create({
+            type: "tour",
+            targetType: "user",
+            targetUsers: userIds,
+            title: "Lịch khởi hành đã được xác nhận",
+            content: `Tuyệt vời! Lịch khởi hành ngày ${startDateStr} của ${tourTitle} đã chính thức được xác nhận. Vui lòng kiểm tra và hoàn tất thanh toán (nếu cần).`,
+            link: "/user/history"
+          });
+        }
+
+        // Gửi email
+        for (const bk of bookings) {
+          if (bk.email) {
+            const tourTitle = currentDep.tourId?.title || "Tour của bạn";
+            const startDateStr = new Date(currentDep.startDate).toLocaleDateString("vi-VN");
+            
+            await sendMail({
+              to: bk.email,
+              subject: `Xác nhận khởi hành: ${tourTitle}`,
+              html: `
+                <div style="font-family: Arial, sans-serif; color: #333; line-height: 1.6;">
+                  <h2 style="color: #0288d1;">Lịch Khởi Hành Đã Được Xác Nhận</h2>
+                  <p>Kính chào quý khách <b>${bk.fullName || 'Khách hàng'}</b>,</p>
+                  <p>Chúng tôi rất vui được thông báo rằng lịch khởi hành ngày <b>${startDateStr}</b> cho <b>${tourTitle}</b> đã chính thức được <b>Xác nhận</b>.</p>
+                  <p>Mã đơn đặt chỗ của bạn: <b>${bk.code}</b>.</p>
+                  <p>Nếu quý khách mới chỉ thanh toán tiền cọc, vui lòng hoàn tất phần thanh toán còn lại trước ngày khởi hành theo quy định để đảm bảo dịch vụ.</p>
+                  <p>Cảm ơn quý khách đã tin tưởng và đồng hành cùng chúng tôi. Chúc quý khách có một chuyến đi tuyệt vời!</p>
+                  <br/>
+                  <p>Trân trọng,<br/><b>Ban Quản Trị Hệ Thống Tour</b></p>
+                </div>
+              `
+            }).catch(err => console.error(`Error sending confirmed email to ${bk.email}:`, err));
+          }
+        }
+      }
+    }
 
     res.json({ message: "Status updated", departure });
   } catch (err) {

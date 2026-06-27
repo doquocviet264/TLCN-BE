@@ -460,6 +460,201 @@ router.put("/leaders/:id", auth, adminOnly, updateAdminLeader);
  *       - in: path
  *         name: id
  *         required: true
+router.post("/tours/:id/expenses", auth, adminOnly, createExpense);
+router.get("/tours/:id/expenses",  auth, adminOnly, listExpensesAdmin);
+
+/**
+ * @openapi
+ * /api/admin/expenses/{expenseId}:
+ *   patch:
+ *     tags:
+ *       - Admin
+ *     summary: Sửa chi phí phát sinh (không cho sửa occurredAt/addedBy)
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: expenseId
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Expense ObjectId
+ *     requestBody:
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *     responses:
+ *       200:
+ *         description: Expense updated
+ *   delete:
+ *     tags:
+ *       - Admin
+ *     summary: Xóa chi phí phát sinh
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: expenseId
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Expense ObjectId
+ *     responses:
+ *       200:
+ *         description: Expense deleted
+ */
+router.patch("/expenses/:expenseId", auth, adminOnly, updateExpense);
+router.delete("/expenses/:expenseId", auth, adminOnly, deleteExpense);
+
+// ==================== ADMIN LEADER MANAGEMENT ====================
+
+/**
+ * @openapi
+ * /api/admin/leaders:
+ *   get:
+ *     tags: [Admin Leaders]
+ *     summary: Danh sách tất cả leaders (admin only) - hỗ trợ phân trang, tìm kiếm, lọc
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: page
+ *         schema:
+ *           type: integer
+ *           default: 1
+ *       - in: query
+ *         name: limit
+ *         schema:
+ *           type: integer
+ *           default: 20
+ *       - in: query
+ *         name: status
+ *         schema:
+ *           type: string
+ *           enum: [active, inactive]
+ *       - in: query
+ *         name: search
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: OK
+ */
+router.get("/leaders", auth, adminOnly, getAdminLeaders);
+
+/**
+ * @openapi
+ * /api/admin/leaders/{id}:
+ *   get:
+ *     tags: [Admin Leaders]
+ *     summary: Chi tiết 1 leader (admin only)
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: OK
+ */
+router.get("/leaders/:id", auth, adminOnly, getAdminLeaderById);
+
+/**
+ * @openapi
+ * /api/admin/leaders:
+ *   post:
+ *     tags: [Admin Leaders]
+ *     summary: Tạo leader mới (admin only)
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [fullName, username, email, password]
+ *             properties:
+ *               fullName:
+ *                 type: string
+ *               username:
+ *                 type: string
+ *               email:
+ *                 type: string
+ *               password:
+ *                 type: string
+ *               phoneNumber:
+ *                 type: string
+ *               address:
+ *                 type: string
+ *               status:
+ *                 type: string
+ *                 enum: [active, inactive]
+ *                 default: active
+ *     responses:
+ *       201:
+ *         description: Leader created
+ */
+router.post("/leaders", auth, adminOnly, createAdminLeader);
+
+/**
+ * @openapi
+ * /api/admin/leaders/{id}:
+ *   put:
+ *     tags: [Admin Leaders]
+ *     summary: Cập nhật leader (admin only)
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               fullName:
+ *                 type: string
+ *               username:
+ *                 type: string
+ *               email:
+ *                 type: string
+ *               phoneNumber:
+ *                 type: string
+ *               address:
+ *                 type: string
+ *               status:
+ *                 type: string
+ *                 enum: [active, inactive]
+ *               password:
+ *                 type: string
+ *     responses:
+ *       200:
+ *         description: Leader updated
+ */
+router.put("/leaders/:id", auth, adminOnly, updateAdminLeader);
+
+/**
+ * @openapi
+ * /api/admin/leaders/{id}:
+ *   delete:
+ *     tags: [Admin Leaders]
+ *     summary: Xoá leader (admin only)
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
  *         schema:
  *           type: string
  *     responses:
@@ -467,5 +662,15 @@ router.put("/leaders/:id", auth, adminOnly, updateAdminLeader);
  *         description: Leader deleted
  */
 router.delete("/leaders/:id", auth, adminOnly, deleteAdminLeader);
+
+import {
+  getAdminMemories,
+  moderateAdminMemory,
+  deleteAdminMemory
+} from "../controllers/admin.controller.js";
+
+router.get("/memories", auth, adminOnly, getAdminMemories);
+router.patch("/memories/:id/moderate", auth, adminOnly, moderateAdminMemory);
+router.delete("/memories/:id", auth, adminOnly, deleteAdminMemory);
 
 export default router;

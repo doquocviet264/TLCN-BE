@@ -419,7 +419,8 @@ export const getMemoryById = async (req, res) => {
       return res.status(404).json({ success: false, message: "Không tìm thấy bài viết" });
     }
 
-    if (!canAccessMemory(memory, userId)) {
+    const isAdmin = req.user.role === "admin";
+    if (!isAdmin && !canAccessMemory(memory, userId)) {
       return res.status(403).json({
         success: false,
         message: "Bạn không có quyền xem bài viết này",
@@ -456,7 +457,8 @@ export const shareMemory = async (req, res) => {
       return res.status(404).json({ success: false, message: "Không tìm thấy bài viết" });
     }
 
-    if (!canAccessMemory(memory, userId)) {
+    const isAdmin = req.user.role === "admin";
+    if (!isAdmin && !canAccessMemory(memory, userId)) {
       return res.status(403).json({
         success: false,
         message: "Bạn không có quyền chia sẻ bài viết này",
@@ -634,7 +636,8 @@ export const getMemoryComments = async (req, res) => {
         .json({ success: false, message: "Không tìm thấy kỷ niệm" });
     }
 
-    if (!canAccessMemory(memory, userId)) {
+    const isAdmin = req.user.role === "admin";
+    if (!isAdmin && !canAccessMemory(memory, userId)) {
       return res.status(403).json({
         success: false,
         message: "Bạn không có quyền xem bình luận này",
@@ -699,7 +702,8 @@ export const createMemoryComment = async (req, res) => {
         .json({ success: false, message: "Không tìm thấy kỷ niệm" });
     }
 
-    if (!canAccessMemory(memory, userId)) {
+    const isAdmin = req.user.role === "admin";
+    if (!isAdmin && !canAccessMemory(memory, userId)) {
       return res.status(403).json({
         success: false,
         message: "Bạn không có quyền bình luận kỷ niệm này",
@@ -829,3 +833,4 @@ export const unlikeMemory = async (req, res) => {
     res.status(500).json({ success: false, message: "Lỗi máy chủ", error: error.message });
   }
 };
+

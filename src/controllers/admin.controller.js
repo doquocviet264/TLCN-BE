@@ -12,6 +12,8 @@ import { User } from "../models/User.js";
 import { Booking } from "../models/Booking.js";
 import { Review } from "../models/Review.js";
 import { BlogPost } from "../models/BlogPost.js";
+import { TravelMemory } from "../models/TravelMemory.js";
+import { Notification } from "../models/Notification.js";
 import cloudinary from "../config/cloudinary.js";
 import { unlockProvinceForDeparture } from "../services/journey.service.js";
 
@@ -1222,4 +1224,146 @@ export const deleteAdminLeader = async (req, res) => {
     res.status(500).json({ message: err.message });
   }
 };
-
+
+
+/* ===========================
+ *  TRAVEL MEMORIES (CONTENT MODERATION)
+ * =========================== */
+
+export const getAdminMemories = async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 20;
+    const search = req.query.search || "";
+    const privacy = req.query.privacy || "";
+
+    const query = {};
+
+    if (privacy) {
+      query.privacy = privacy;
+    }
+
+    const skip = (page - 1) * limit;
+
+    const memories = await TravelMemory.find(query)
+      .populate("userId", "fullName avatar username email")
+      .populate("tourId", "title")
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limit);
+
+    if (search) {
+      const users = await User.find({
+        $or: [
+          { fullName: { $regex: search, $options: "i" } },
+          { email: { $regex: search, $options: "i" } },
+        ]
+      }).select("_id");
+      const userIds = users.map(u => u._id);
+      
+      const searchQuery = {
+        ...query,
+        $or: [
+          { caption: { $regex: search, $options: "i" } },
+          { provinceName: { $regex: search, $options: "i" } },
+          { userId: { $in: userIds } }
+        ]
+      };
+      
+      const filteredMemories = await TravelMemory.find(searchQuery)
+        .populate("userId", "fullName avatar username email")
+        .populate("tourId", "title")
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit);
+
+      const total = await TravelMemory.countDocuments(searchQuery);
+
+      return res.json({
+        data: filteredMemories,
+        total,
+        page,
+        totalPages: Math.ceil(total / limit),
+      });
+    }
+
+    const total = await TravelMemory.countDocuments(query);
+
+    res.json({
+      data: memories,
+      total,
+      page,
+      totalPages: Math.ceil(total / limit),
+    });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+};
+
+export const moderateAdminMemory = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const memory = await TravelMemory.findById(id).populate("userId", "fullName email");
+
+    if (!memory) {
+      return res.status(404).json({ message: "Không tìm thấy kỷ niệm" });
+    }
+
+    if (memory.privacy === "private") {
+      return res.status(400).json({ message: "Bài viết này vốn đã ở trạng thái Riêng tư." });
+    }
+
+    // Force to private
+    memory.privacy = "private";
+    await memory.save();
+
+    // Notify user
+    await Notification.create({
+      title: "Bài viết đã bị ẩn",
+      message: "Một kỷ niệm chuyến đi của bạn đã bị quản trị viên chuyển sang trạng thái Riêng tư do vi phạm tiêu chuẩn cộng đồng.",
+      type: "system",
+      targetType: "user",
+      targetUsers: [memory.userId._id],
+    });
+
+    res.json({ message: "Đã ẩn bài viết và gửi thông báo thành công", memory });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+};
+
+export const deleteAdminMemory = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const memory = await TravelMemory.findById(id).populate("userId", "fullName email");
+
+    if (!memory) {
+      return res.status(404).json({ message: "Không tìm thấy kỷ niệm" });
+    }
+
+    // Delete images on Cloudinary if exist
+    if (memory.images && memory.images.length > 0) {
+      for (const imageUrl of memory.images) {
+        const publicIdMatch = imageUrl.match(/\/v\d+\/(.+)\.\w+$/);
+        if (publicIdMatch && publicIdMatch[1]) {
+          await cloudinary.uploader.destroy(publicIdMatch[1]);
+        }
+      }
+    }
+
+    await TravelMemory.findByIdAndDelete(id);
+
+    // Notify user
+    await Notification.create({
+      title: "Bài viết đã bị xóa",
+      message: "Một kỷ niệm chuyến đi của bạn đã bị quản trị viên xóa do vi phạm nghiêm trọng tiêu chuẩn cộng đồng.",
+      type: "system",
+      targetType: "user",
+      targetUsers: [memory.userId._id],
+    });
+
+    res.json({ message: "Đã xóa bài viết thành công" });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+};

@@ -758,6 +758,10 @@ export const updateAdminBookingStatus = async (req, res) => {
     if (!allowed.includes(status)) {
       return res.status(400).json({ message: "Invalid status" });
     }
+    const oldBooking = await Booking.findById(req.params.id);
+    if (!oldBooking) return res.status(404).json({ message: "Not found" });
+    const oldStatus = oldBooking.bookingStatus;
+
     const update = { bookingStatus: status };
     if (status === "cancelled" && cancelReason) update.cancelReason = cancelReason;
 
@@ -773,7 +777,16 @@ export const updateAdminBookingStatus = async (req, res) => {
       .populate("userId")
       .lean();
 
-    if (!booking) return res.status(404).json({ message: "Not found" });
+    // Hoàn trả slot nếu trạng thái chuyển sang cancelled
+    if (oldStatus !== "cancelled" && status === "cancelled") {
+      const guestsToRelease = (booking.numAdults || 0) + (booking.numChildren || 0);
+      if (guestsToRelease > 0 && booking.tourDepartureId) {
+        await TourDeparture.updateOne(
+          { _id: booking.tourDepartureId._id || booking.tourDepartureId },
+          { $inc: { current_guests: -guestsToRelease } }
+        );
+      }
+    }
 
     // Nếu Admin xác nhận Tour, gửi mail thông báo
     if (status === "confirmed" && booking.tourDepartureId && booking.tourDepartureId.tourId) {
@@ -1020,17 +1033,25 @@ export const refundBookingPayment = async (req, res) => {
       note: reason || "Admin refund",
     });
 
-    // Cập nhật lại trạng thái nếu bị hụt tiền
-    if (booking.paidAmount < booking.totalPrice) {
-      if (booking.bookingStatus === "completed") booking.bookingStatus = "confirmed";
-      const depositThreshold3 = booking.totalPrice * 0.5;
-      if (booking.paidAmount < depositThreshold3) {
-        booking.depositPaid = false;
-        if (booking.bookingStatus === "confirmed") booking.bookingStatus = "pending";
-      }
-    }
+    const oldStatus = booking.bookingStatus;
+    
+    // Khi hoàn tiền, tự động chuyển trạng thái đơn sang Hủy
+    booking.bookingStatus = "cancelled";
+    booking.cancelReason = reason || "Hủy do hoàn tiền";
+    booking.depositPaid = false;
 
     await booking.save();
+
+    // Nếu đơn chưa bị hủy trước đó, hoàn trả slot lại cho lịch khởi hành
+    if (oldStatus !== "cancelled") {
+      const guestsToRelease = (booking.numAdults || 0) + (booking.numChildren || 0);
+      if (guestsToRelease > 0 && booking.tourDepartureId) {
+        await TourDeparture.updateOne(
+          { _id: booking.tourDepartureId },
+          { $inc: { current_guests: -guestsToRelease } }
+        );
+      }
+    }
 
     res.json({
       message: "Refund processed successfully",
