@@ -466,3 +466,36 @@ export const listOngoingDepartures = async (req, res) => {
     res.status(500).json({ message: err.message });
   }
 };
+
+/* ========================================================
+ *  10. Li?t kê toàn b? l?ch kh?i hành toàn h? th?ng (Global)
+ *  GET /api/admin/reports
+ * ======================================================== */
+export const listAllDepartures = async (req, res) => {
+  try {
+    const { status, leaderId, startDate, endDate, page = 1, limit = 50 } = req.query;
+    const filter = {};
+    
+    if (status) filter.status = status;
+    if (leaderId) filter.leaderId = new mongoose.Types.ObjectId(leaderId);
+
+    if (startDate || endDate) {
+      filter.startDate = {};
+      if (startDate) filter.startDate.$gte = new Date(startDate);
+      if (endDate) filter.startDate.$lte = new Date(endDate);
+    }
+
+    const total = await TourDeparture.countDocuments(filter);
+    const data = await TourDeparture.find(filter)
+      .populate("tourId", "title destination images")
+      .populate("leaderId", "fullName username")
+      .sort({ createdAt: -1 })
+      .skip((Number(page) - 1) * Number(limit))
+      .limit(Number(limit))
+      .lean();
+
+    res.json({ total, page: Number(page), limit: Number(limit), data });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+};

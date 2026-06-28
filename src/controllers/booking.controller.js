@@ -12,6 +12,20 @@ import {
 } from "../utils/emailTemplates.js";
 import { Notification } from "../models/Notification.js";
 
+// Helper: Trả lại slot và hoàn tác trạng thái nếu dưới min_guests
+const releaseDepartureSlots = async (departureId, guestsToRelease) => {
+  if (!departureId || guestsToRelease <= 0) return;
+  const dep = await TourDeparture.findByIdAndUpdate(
+    departureId,
+    { $inc: { current_guests: -guestsToRelease } },
+    { new: true }
+  );
+  if (dep && dep.status === "confirmed" && dep.current_guests < (dep.min_guests || 0)) {
+    dep.status = "pending";
+    await dep.save();
+  }
+};
+
 // 1. Tạo Booking Mới (Gửi mail xác nhận đặt tour)
 export const createBooking = async (req, res) => {
   const session = await mongoose.startSession();
@@ -342,12 +356,7 @@ export const cancelBookingByUser = async (req, res) => {
 
   // Trả lại slot khi hủy booking ở Departure
   const guestsToRelease = (bk.numAdults || 0) + (bk.numChildren || 0);
-  if (guestsToRelease > 0 && bk.tourDepartureId) {
-    await TourDeparture.updateOne(
-      { _id: bk.tourDepartureId },
-      { $inc: { current_guests: -guestsToRelease } }
-    );
-  }
+  await releaseDepartureSlots(bk.tourDepartureId, guestsToRelease);
 
   // Có thể thêm gửi mail thông báo hủy ở đây nếu muốn
 
@@ -780,12 +789,7 @@ export const updateAdminBookingStatus = async (req, res) => {
     // Hoàn trả slot nếu trạng thái chuyển sang cancelled
     if (oldStatus !== "cancelled" && status === "cancelled") {
       const guestsToRelease = (booking.numAdults || 0) + (booking.numChildren || 0);
-      if (guestsToRelease > 0 && booking.tourDepartureId) {
-        await TourDeparture.updateOne(
-          { _id: booking.tourDepartureId._id || booking.tourDepartureId },
-          { $inc: { current_guests: -guestsToRelease } }
-        );
-      }
+      await releaseDepartureSlots(booking.tourDepartureId._id || booking.tourDepartureId, guestsToRelease);
     }
 
     // Nếu Admin xác nhận Tour, gửi mail thông báo
@@ -841,12 +845,7 @@ export const deleteAdminBooking = async (req, res) => {
     if (!booking) return res.status(404).json({ message: "Not found" });
     // Hoàn trả slot khi xóa booking
     const guestsToRelease = (booking.numAdults || 0) + (booking.numChildren || 0);
-    if (guestsToRelease > 0 && booking.tourDepartureId) {
-      await TourDeparture.updateOne(
-        { _id: booking.tourDepartureId },
-        { $inc: { current_guests: -guestsToRelease } }
-      );
-    }
+    await releaseDepartureSlots(booking.tourDepartureId, guestsToRelease);
     res.json({ message: "Deleted", booking });
   } catch (err) {
     res.status(500).json({ message: err.message });
@@ -1045,12 +1044,7 @@ export const refundBookingPayment = async (req, res) => {
     // Nếu đơn chưa bị hủy trước đó, hoàn trả slot lại cho lịch khởi hành
     if (oldStatus !== "cancelled") {
       const guestsToRelease = (booking.numAdults || 0) + (booking.numChildren || 0);
-      if (guestsToRelease > 0 && booking.tourDepartureId) {
-        await TourDeparture.updateOne(
-          { _id: booking.tourDepartureId },
-          { $inc: { current_guests: -guestsToRelease } }
-        );
-      }
+      await releaseDepartureSlots(booking.tourDepartureId, guestsToRelease);
     }
 
     res.json({

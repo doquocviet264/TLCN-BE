@@ -376,9 +376,12 @@ export const leaderSubmitTourReport = async (req, res) => {
     }
 
     const dep = await TourDeparture.findOne({ _id: id, leaderId: req.user.id })
-      .select("_id")
+      .select("_id status")
       .lean();
     if (!dep) return res.status(404).json({ message: "Departure not found or not assigned to you" });
+    if (dep.status !== "completed" && dep.status !== "closed") {
+      return res.status(400).json({ message: "Chuyến đi phải hoàn thành mới có thể nộp báo cáo" });
+    }
 
     const requestedNoShows = Array.isArray(noShowBookingIds)
       ? toObjectIds(noShowBookingIds)
