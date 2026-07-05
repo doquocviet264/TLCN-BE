@@ -30,6 +30,7 @@ import favoriteRoutes from "./routes/favorite.routes.js";
 import notificationRoutes from "./routes/notification.routes.js";
 import travelMemoryRoutes from "./routes/travelMemory.routes.js";
 import journeyRoutes from "./routes/journey.routes.js";
+import contactRoutes from "./routes/contact.routes.js";
 
 import { registerConfirmOrRefundJob } from "./jobs/confirmOrRefund.job.js";
 import { registerNotificationJobs } from "./jobs/notification.jobs.js";
@@ -162,6 +163,7 @@ app.use("/api/favorites", favoriteRoutes);
 app.use("/api/notifications", notificationRoutes);
 app.use("/api/travel-memories", travelMemoryRoutes);
 app.use("/api/journey", journeyRoutes);
+app.use("/api/contact", contactRoutes);
 
 /* =========================
  *  404 FALLBACK
