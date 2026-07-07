@@ -345,17 +345,32 @@ export const getPublicMemories = async (req, res) => {
       query.provinceName = province;
     }
 
-    // Bảng tin cộng đồng phải theo thời điểm CHIA SẺ (createdAt), không phải
-    // ngày đi (visitedAt) do user tự chọn — nếu không, bài vừa đăng có thể
-    // bị chìm xuống dưới các bài có ngày đi gần hơn nhưng đăng từ lâu.
-    const memories = await TravelMemory.find(query)
-      .populate("userId", "fullName avatar")
-      .sort({ createdAt: -1 })
-      .skip((page - 1) * limit)
-      .limit(parseInt(limit))
-      .lean();
+    const parsedLimit = parseInt(limit);
+    const parsedPage = parseInt(page);
 
     const total = await TravelMemory.countDocuments(query);
+
+    // Bảng tin cộng đồng: Lấy một pool gồm nhiều bài hơn (gấp 3 lần) 
+    // để xáo trộn (shuffle), giúp bảng tin trông "lộn xộn" và mới mẻ 
+    // mỗi lần tải, nhưng vẫn giữ được các bài gần đây nhất.
+    const POOL_FACTOR = 3;
+    const poolSize = parsedLimit * POOL_FACTOR;
+
+    const pool = await TravelMemory.find(query)
+      .populate("userId", "fullName avatar")
+      .sort({ createdAt: -1 })
+      .skip((parsedPage - 1) * parsedLimit)
+      .limit(poolSize)
+      .lean();
+
+    // Fisher-Yates shuffle để làm lộn xộn các bài trong pool
+    for (let i = pool.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [pool[i], pool[j]] = [pool[j], pool[i]];
+    }
+
+    // Chọn ra đúng số lượng bài cần thiết
+    const memories = pool.slice(0, parsedLimit);
 
     // Kiem tra xem user hien tai da like chua
     if (userId) {
