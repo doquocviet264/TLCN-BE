@@ -259,6 +259,14 @@ export const createMemoryFromBooking = async (req, res) => {
       return res.status(400).json({ success: false, message: "Tour không hợp lệ hoặc thiếu điểm đến" });
     }
 
+    // Kiểm tra điểm danh (chỉ khách có mặt mới được viết nhật ký)
+    const checkin = departure.passengerCheckins?.find(
+      ci => ci.bookingId.toString() === booking._id.toString()
+    );
+    if (!checkin || !checkin.isPresent) {
+      return res.status(403).json({ success: false, message: "Bạn vắng mặt trong chuyến đi nên không thể đăng nhật ký" });
+    }
+
     if (!["completed", "closed"].includes(departure.status)) {
       return res.status(400).json({
         success: false,

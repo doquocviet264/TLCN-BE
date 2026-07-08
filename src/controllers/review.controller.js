@@ -32,6 +32,15 @@ export const createReview = async (req, res) => {
       return res.status(403).json({ message: "Bạn chỉ có thể đánh giá tour đã hoàn thành" });
     }
 
+    // Kiểm tra điểm danh (chỉ khách có mặt mới được viết review)
+    const departure = booked.tourDepartureId;
+    const checkin = departure.passengerCheckins?.find(
+      ci => ci.bookingId.toString() === booked._id.toString()
+    );
+    if (!checkin || !checkin.isPresent) {
+      return res.status(403).json({ message: "Bạn vắng mặt trong chuyến đi nên không thể viết đánh giá" });
+    }
+
     // Tạo hoặc update review
     const review = await Review.findOneAndUpdate(
       { tourId, userId: req.user.id },
