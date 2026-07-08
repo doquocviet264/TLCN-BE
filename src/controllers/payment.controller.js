@@ -181,8 +181,8 @@ export const vnpayReturn = async (req, res) => {
       booking.depositPaid = true;
       if (booking.bookingStatus === "pending") booking.bookingStatus = "confirmed";
     }
-    if (booking.paidAmount >= booking.totalPrice) {
-      booking.bookingStatus = "completed";
+    if (booking.paidAmount >= booking.totalPrice && booking.bookingStatus === "pending") {
+      booking.bookingStatus = "confirmed";
     }
     await booking.save();
 
@@ -310,8 +310,8 @@ export const vnpayIpn = async (req, res) => {
       booking.depositPaid = true;
       if (booking.bookingStatus === "pending") booking.bookingStatus = "confirmed";
     }
-    if (booking.paidAmount >= booking.totalPrice) {
-      booking.bookingStatus = "completed";
+    if (booking.paidAmount >= booking.totalPrice && booking.bookingStatus === "pending") {
+      booking.bookingStatus = "confirmed";
     }
     await booking.save();
 

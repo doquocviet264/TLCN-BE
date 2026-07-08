@@ -246,8 +246,8 @@ export const onPaymentReceived = async (req, res) => {
       booking.depositPaid = true;
       if (booking.bookingStatus === "pending") booking.bookingStatus = "confirmed";
     }
-    if (booking.paidAmount >= booking.totalPrice) {
-      booking.bookingStatus = "completed";
+    if (booking.paidAmount >= booking.totalPrice && booking.bookingStatus === "pending") {
+      booking.bookingStatus = "confirmed";
     }
 
     await booking.save();
@@ -681,8 +681,8 @@ export const adminCreateBooking = async (req, res) => {
         depositPaid = true;
         bookingStatus = "confirmed";
       }
-      if (paidAmount >= totalPrice) {
-        bookingStatus = "completed";
+      if (paidAmount >= totalPrice && bookingStatus === "pending") {
+        bookingStatus = "confirmed";
       }
     }
 
@@ -883,7 +883,7 @@ export const updateAdminBookingPayment = async (req, res) => {
         booking.depositPaid = true;
         if (booking.bookingStatus === "pending") booking.bookingStatus = "confirmed";
       }
-      if (booking.paidAmount >= booking.totalPrice) booking.bookingStatus = "completed";
+      if (booking.paidAmount >= booking.totalPrice && booking.bookingStatus === "pending") booking.bookingStatus = "confirmed";
 
       await booking.save();
 
@@ -981,8 +981,8 @@ export const bulkMarkBookingsPaid = async (req, res) => {
         booking.depositPaid = true;
         if (booking.bookingStatus === "pending") booking.bookingStatus = "confirmed";
       }
-      if (booking.paidAmount >= booking.totalPrice) {
-        booking.bookingStatus = "completed";
+      if (booking.paidAmount >= booking.totalPrice && booking.bookingStatus === "pending") {
+        booking.bookingStatus = "confirmed";
       }
 
       await booking.save();
