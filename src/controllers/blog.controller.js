@@ -20,31 +20,21 @@ export const getRelatedBlogsForTour = async (req, res) => {
       return res.status(404).json({ message: "Không tìm thấy tour" });
     }
 
-    // Tạo danh sách từ khóa từ destination và title
-    const keywords = [
-      tour.destination,
-      ...(tour.title || "").split(/[\s,·\-–]+/)
-    ]
-      .filter(Boolean)
-      .map(w => w.trim())
-      .filter(w => w.length >= 2); // loại từ quá ngắn
-
-    if (keywords.length === 0) {
+    const destinationStr = (tour.destination || "").trim();
+    if (!destinationStr) {
       return res.json({ data: [] });
     }
 
-    // Tìm blog published + public, match bất kỳ keyword nào trong title/summary/tags/province
-    const regexPatterns = keywords.slice(0, 5).map(k => new RegExp(k, "i"));
+    const destRegex = new RegExp(destinationStr, "i");
 
     const blogs = await BlogPost.find({
       status: "published",
       privacy: "public",
-      $or: regexPatterns.flatMap(regex => [
-        { title: regex },
-        { summary: regex },
-        { tags: regex },
-        { province: regex },
-      ]),
+      $or: [
+        { province: destRegex },
+        { tags: destRegex },
+        { title: destRegex },
+      ],
     })
       .sort({ publishedAt: -1 })
       .limit(2)
