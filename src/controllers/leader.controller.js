@@ -199,6 +199,13 @@ export const leaderAddTimeline = async (req, res) => {
     if (isNaN(atDate.getTime()))
       return res.status(400).json({ message: "Invalid 'at' datetime" });
 
+    const currentDep = await TourDeparture.findOne({ _id: id, leaderId: req.user.id });
+    if (!currentDep) return res.status(404).json({ message: "Departure not found or not assigned to you" });
+
+    if (eventType !== "departed" && !["in_progress", "completed"].includes(currentDep.status)) {
+      return res.status(400).json({ message: "Chuyến đi chưa xuất phát, không thể thêm sự kiện này!" });
+    }
+
     const update = {
       $push: {
         timeline: {
@@ -216,12 +223,11 @@ export const leaderAddTimeline = async (req, res) => {
     if (eventType === "arrived")   update.$set = { ...(update.$set || {}), arrivedAt: atDate };
     if (eventType === "finished")  update.$set = { ...(update.$set || {}), status: "completed", finishedAt: atDate };
 
-    const departure = await TourDeparture.findOneAndUpdate(
-      { _id: id, leaderId: req.user.id }, // ràng buộc sở hữu
+    const departure = await TourDeparture.findByIdAndUpdate(
+      id,
       update,
       { new: true }
     );
-    if (!departure) return res.status(404).json({ message: "Departure not found or not assigned to you" });
 
     let completedBookings = null;
     if (eventType === "finished") {
@@ -255,8 +261,12 @@ export const leaderCreateExpense = async (req, res) => {
       : [];
 
     // Chỉ cho phép leader thêm chi phí trên departure của mình
-    const dep = await TourDeparture.exists({ _id: id, leaderId: req.user.id });
+    const dep = await TourDeparture.findOne({ _id: id, leaderId: req.user.id });
     if (!dep) return res.status(404).json({ message: "Departure not found or not assigned to you" });
+
+    if (!["in_progress", "completed"].includes(dep.status)) {
+      return res.status(400).json({ message: "Chuyến đi chưa xuất phát, không thể thêm chi phí phát sinh!" });
+    }
 
     const expense = await Expense.create({
       tourDepartureId: new mongoose.Types.ObjectId(id),
