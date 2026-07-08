@@ -34,6 +34,7 @@ import contactRoutes from "./routes/contact.routes.js";
 
 import { registerConfirmOrRefundJob } from "./jobs/confirmOrRefund.job.js";
 import { registerNotificationJobs } from "./jobs/notification.jobs.js";
+import { registerAutoCancelJobs } from "./jobs/autoCancel.job.js";
 
 const app = express();
 
@@ -175,5 +176,6 @@ app.use((req, res) => res.status(404).json({ message: "Not Found" }));
  * ========================= */
 registerConfirmOrRefundJob();
 registerNotificationJobs();
+registerAutoCancelJobs();
 
 export default app;

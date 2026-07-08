@@ -75,6 +75,12 @@ export const createBooking = async (req, res) => {
     if (departure.status === "closed")
       return res.status(400).json({ message: "Lịch khởi hành này đã đóng" });
 
+    // Validate deposit rules
+    const diffDays = departure.startDate ? Math.ceil((new Date(departure.startDate).getTime() - new Date().getTime()) / (1000 * 3600 * 24)) : 999;
+    if (req.body.paymentType === "deposit" && diffDays < 3) {
+      return res.status(400).json({ message: "Không thể đặt cọc khi ngày khởi hành còn dưới 3 ngày, vui lòng thanh toán toàn bộ." });
+    }
+
     const tour = departure.tourId;
     if (!tour) return res.status(404).json({ message: "Dữ liệu tour không tìm thấy" });
 
