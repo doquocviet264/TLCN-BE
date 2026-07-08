@@ -9,7 +9,7 @@ const TimelineEventSchema = new mongoose.Schema({
   note:      { type: String, default: "" },
   createdBy: { type: mongoose.Schema.Types.ObjectId, ref: "Admin", required: true },
   createdByRole: { type: String, enum: ["admin", "leader"], default: "admin" }
-}, { _id: false });
+});
 
 const PassengerCheckinSchema = new mongoose.Schema({
   bookingId: { type: mongoose.Schema.Types.ObjectId, ref: "Booking", required: true },
