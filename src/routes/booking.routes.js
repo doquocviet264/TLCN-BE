@@ -6,6 +6,7 @@ import {
   myBookings,
   cancelBookingByUser,
   getMyBookingDetail,
+  checkOverlapBooking,
 } from "../controllers/booking.controller.js";
 
 const router = Router();
@@ -173,6 +174,26 @@ router.post("/deposit/webhook", onPaymentReceived);
  *       401: { description: Unauthorized }
  */
 router.get("/me", auth, myBookings);
+
+/**
+ * @openapi
+ * /bookings/check-overlap:
+ *   get:
+ *     summary: Kiểm tra trùng lặp lịch trình
+ *     tags: [Bookings]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: departureId
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: Trả về trạng thái trùng lặp
+ */
+router.get("/check-overlap", auth, checkOverlapBooking);
 
 /**
  * @openapi

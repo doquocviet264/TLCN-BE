@@ -1130,3 +1130,63 @@ export const getPaymentHistory = async (req, res) => {
     res.status(500).json({ message: err.message });
   }
 };
+
+// 16. Kiểm tra trùng lặp lịch trình (trước khi đặt)
+export const checkOverlapBooking = async (req, res) => {
+  try {
+    const { departureId } = req.query;
+    if (!departureId) return res.json({ hasOverlap: false });
+    
+    if (!req.user || !req.user._id) {
+      return res.json({ hasOverlap: false }); // Guest booking
+    }
+
+    const TourDepartureModel = mongoose.model("TourDeparture");
+    const targetDeparture = await TourDepartureModel.findById(departureId).select("startDate endDate tourId").populate("tourId", "title");
+    if (!targetDeparture || !targetDeparture.startDate) {
+      return res.json({ hasOverlap: false });
+    }
+
+    const tStart = new Date(targetDeparture.startDate);
+    const tEnd = new Date(targetDeparture.endDate || targetDeparture.startDate);
+    // set to boundaries
+    tStart.setHours(0,0,0,0);
+    tEnd.setHours(23,59,59,999);
+
+    const userBookings = await Booking.find({
+      userId: req.user._id,
+      bookingStatus: { $in: ["pending", "confirmed"] }
+    }).populate({
+      path: "tourDepartureId",
+      select: "startDate endDate tourId",
+      populate: { path: "tourId", select: "title" }
+    });
+
+    for (const b of userBookings) {
+      if (!b.tourDepartureId || !b.tourDepartureId.startDate) continue;
+
+      const eStart = new Date(b.tourDepartureId.startDate);
+      const eEnd = new Date(b.tourDepartureId.endDate || b.tourDepartureId.startDate);
+      eStart.setHours(0,0,0,0);
+      eEnd.setHours(23,59,59,999);
+
+      // overlap condition: (StartA <= EndB) and (EndA >= StartB)
+      if (tStart <= eEnd && tEnd >= eStart) {
+        return res.json({
+          hasOverlap: true,
+          overlapDetails: {
+            bookingCode: b.code,
+            tourTitle: b.tourDepartureId.tourId?.title || "Chuyến đi",
+            startDate: b.tourDepartureId.startDate,
+            endDate: b.tourDepartureId.endDate
+          }
+        });
+      }
+    }
+
+    res.json({ hasOverlap: false });
+  } catch (err) {
+    console.error("Check overlap error:", err);
+    res.json({ hasOverlap: false });
+  }
+};
