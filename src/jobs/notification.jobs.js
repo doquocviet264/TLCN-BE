@@ -2,6 +2,7 @@ import cron from "node-cron";
 import { Booking } from "../models/Booking.js";
 import { TourDeparture } from "../models/TourDeparture.js";
 import { Notification } from "../models/Notification.js";
+import { sendMail } from "../services/mailer.js";
 
 // Đăng ký các Job liên quan đến Thông báo
 export const registerNotificationJobs = () => {
@@ -98,6 +99,57 @@ export const registerNotificationJobs = () => {
             targetUsers: userIds,
             targetTourId: d.tourId?._id,
           });
+        }
+      }
+
+      // 2.5 Nhắc nhở thanh toán phần còn lại (Chạy hằng ngày trước 2 đến 4 ngày)
+      const in2DaysStart = new Date(now); in2DaysStart.setDate(in2DaysStart.getDate() + 2); in2DaysStart.setHours(0,0,0,0);
+      const in4DaysEnd = new Date(now); in4DaysEnd.setDate(in4DaysEnd.getDate() + 4); in4DaysEnd.setHours(23,59,59,999);
+
+      const depsPaymentReminder = await TourDeparture.find({
+        status: { $in: ["confirmed", "pending"] },
+        startDate: { $gte: in2DaysStart, $lte: in4DaysEnd },
+      }).populate("tourId");
+
+      for (const d of depsPaymentReminder) {
+        const bookings = await Booking.find({
+          tourDepartureId: d._id,
+          bookingStatus: { $in: ["confirmed", "pending"] },
+          depositPaid: true,
+          $expr: { $lt: ["$paidAmount", "$totalPrice"] }
+        });
+
+        for (const b of bookings) {
+          if (b.userId) {
+            await Notification.create({
+              type: "payment",
+              title: "Nhắc nhở thanh toán số tiền còn lại",
+              content: `Đơn đặt tour #${b.code} của chuyến đi "${d.tourId?.title}" vẫn chưa được thanh toán đủ. Vui lòng thanh toán số tiền còn lại sớm nhất có thể để hệ thống không tự động hủy đơn trước ngày đi.`,
+              link: `/user/history`,
+              targetType: "user",
+              targetUsers: [b.userId],
+              targetTourId: d.tourId?._id,
+            });
+          }
+          if (b.email) {
+            const subject = `Nhắc nhở thanh toán phần còn lại - Đơn #${b.code} — AHH Travel`;
+            const html = `
+              <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; color: #333;">
+                <h2>Xin chào ${b.fullName || "bạn"},</h2>
+                <p>Đơn đặt tour <strong>#${b.code}</strong> (Chuyến đi: ${d.tourId?.title}) của bạn hiện vẫn chưa được thanh toán đầy đủ.</p>
+                <p>Vui lòng thanh toán số tiền còn lại càng sớm càng tốt. Hệ thống của chúng tôi sẽ <strong>tự động hủy các đơn hàng chưa thanh toán đủ trước 24 giờ so với thời điểm khởi hành</strong>.</p>
+                <p>Xin cảm ơn bạn đã tin tưởng và sử dụng dịch vụ của AHH Travel!</p>
+                <br/>
+                <p>Trân trọng,</p>
+                <p><strong>Đội ngũ AHH Travel</strong></p>
+              </div>
+            `;
+            try {
+              await sendMail({ to: b.email, subject, html });
+            } catch (error) {
+              console.error(`[CRON JOB] Failed to send payment reminder email to ${b.email}:`, error);
+            }
+          }
         }
       }
 
