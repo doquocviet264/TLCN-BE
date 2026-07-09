@@ -427,3 +427,102 @@ export const leaderSubmitTourReport = async (req, res) => {
     res.status(500).json({ message: err.message });
   }
 };
+
+/* ========================================================
+ *  10. Leader Xóa Sự Kiện Timeline
+ *  DELETE /api/leader/departures/:id/timeline/:timelineId
+ * ======================================================== */
+export const leaderDeleteTimeline = async (req, res) => {
+  try {
+    const { id, timelineId } = req.params;
+
+    const dep = await TourDeparture.findOne({ _id: id, leaderId: req.user.id });
+    if (!dep) return res.status(404).json({ message: "Departure not found or not assigned to you" });
+
+    if (dep.leaderReport && dep.leaderReport.status === "submitted") {
+      return res.status(400).json({ message: "Chuyến đi đã được báo cáo, không thể xóa sự kiện!" });
+    }
+
+    const event = dep.timeline.id(timelineId);
+    if (!event) return res.status(404).json({ message: "Timeline event not found" });
+
+    if (event.eventType === "departed") {
+      return res.status(400).json({ message: "Không thể xóa sự kiện Bắt đầu chuyến đi!" });
+    }
+
+    if (event.eventType === "finished") {
+      dep.status = "in_progress";
+      dep.finishedAt = undefined;
+      await Booking.updateMany(
+        { tourDepartureId: id, bookingStatus: "completed" },
+        { $set: { bookingStatus: "confirmed" } }
+      );
+    }
+
+    event.deleteOne();
+    await dep.save();
+
+    res.json({ message: "Đã xóa sự kiện", timeline: dep.timeline });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+};
+
+/* ========================================================
+ *  11. Leader Sửa Chi Phí
+ *  PUT /api/leader/departures/:id/expenses/:expenseId
+ * ======================================================== */
+export const leaderUpdateExpense = async (req, res) => {
+  try {
+    const { id, expenseId } = req.params;
+    const { title, amount, note, visibleToCustomers, receiptImages } = req.body;
+
+    const dep = await TourDeparture.exists({ _id: id, leaderId: req.user.id });
+    if (!dep) return res.status(404).json({ message: "Departure not found or not assigned to you" });
+
+    const expense = await Expense.findOne({ _id: expenseId, tourDepartureId: id });
+    if (!expense) return res.status(404).json({ message: "Expense not found" });
+
+    if (expense.status !== "pending") {
+      return res.status(400).json({ message: "Chỉ được sửa chi phí chưa duyệt!" });
+    }
+
+    if (title !== undefined) expense.title = title;
+    if (amount !== undefined) expense.amount = Number(amount);
+    if (note !== undefined) expense.note = note;
+    if (visibleToCustomers !== undefined) expense.visibleToCustomers = Boolean(visibleToCustomers);
+    if (Array.isArray(receiptImages)) {
+      expense.receiptImages = receiptImages.filter(url => typeof url === "string" && url.trim()).slice(0, 5);
+    }
+
+    await expense.save();
+    res.json({ message: "Đã cập nhật chi phí", expense });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+};
+
+/* ========================================================
+ *  12. Leader Xóa Chi Phí
+ *  DELETE /api/leader/departures/:id/expenses/:expenseId
+ * ======================================================== */
+export const leaderDeleteExpense = async (req, res) => {
+  try {
+    const { id, expenseId } = req.params;
+
+    const dep = await TourDeparture.exists({ _id: id, leaderId: req.user.id });
+    if (!dep) return res.status(404).json({ message: "Departure not found or not assigned to you" });
+
+    const expense = await Expense.findOne({ _id: expenseId, tourDepartureId: id });
+    if (!expense) return res.status(404).json({ message: "Expense not found" });
+
+    if (expense.status !== "pending") {
+      return res.status(400).json({ message: "Chỉ được xóa chi phí chưa duyệt!" });
+    }
+
+    await expense.deleteOne();
+    res.json({ message: "Đã xóa chi phí" });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+};

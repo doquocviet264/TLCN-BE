@@ -11,6 +11,9 @@ import {
   leaderUpdateBookingCheckin,
   leaderGetMe,
   leaderSubmitTourReport,
+  leaderDeleteTimeline,
+  leaderUpdateExpense,
+  leaderDeleteExpense,
 } from "../controllers/leader.controller.js";
 
 const router = Router();
@@ -165,6 +168,9 @@ router.patch("/departures/:id/report", auth, leaderOnly, leaderOwnsDeparture, le
  */
 router.post("/departures/:id/expenses", auth, leaderOnly, leaderOwnsDeparture, leaderCreateExpense);
 router.get("/departures/:id/expenses",  auth, leaderOnly, leaderGetExpenses);
+router.put("/departures/:id/expenses/:expenseId", auth, leaderOnly, leaderUpdateExpense);
+router.delete("/departures/:id/expenses/:expenseId", auth, leaderOnly, leaderDeleteExpense);
+router.delete("/departures/:id/timeline/:timelineId", auth, leaderOnly, leaderDeleteTimeline);
 
 // ── Backward-compat: /tours → redirect sang /departures ──────────────
 // Giữ để không break các client cũ đang call /leader/tours
@@ -172,6 +178,9 @@ router.get("/tours",              auth, leaderOnly, leaderMyTours);
 router.get("/tours/:id",          auth, leaderOnly, leaderGetDeparture);
 router.get("/tours/:id/bookings", auth, leaderOnly, leaderGetTourBookings);
 router.post("/tours/:id/timeline", auth, leaderOnly, leaderOwnsDeparture, leaderAddTimeline);
+router.delete("/tours/:id/timeline/:timelineId", auth, leaderOnly, leaderDeleteTimeline);
 router.post("/tours/:id/expenses", auth, leaderOnly, leaderOwnsDeparture, leaderCreateExpense);
+router.put("/tours/:id/expenses/:expenseId", auth, leaderOnly, leaderUpdateExpense);
+router.delete("/tours/:id/expenses/:expenseId", auth, leaderOnly, leaderDeleteExpense);
 
 export default router;
