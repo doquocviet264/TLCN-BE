@@ -5,6 +5,7 @@ import { Expense }       from "../models/Expense.js";
 import { Booking }       from "../models/Booking.js";
 import { Leader }        from "../models/Leader.js";
 import { unlockProvinceForDeparture } from "../services/journey.service.js";
+import { decryptField } from "../utils/crypto.js";
 
 const CANCELLED_BOOKING_STATUSES = ["cancelled", "x"];
 
@@ -108,22 +109,37 @@ export const leaderGetPassengers = async (req, res) => {
       bookingStatus: { $nin: CANCELLED_BOOKING_STATUSES },
     })
       .populate("userId", "fullName email phoneNumber avatar")
-      .select("code userId fullName email phoneNumber numAdults numChildren totalPrice bookingStatus paidAmount depositPaid createdAt note")
+      .select("code userId fullName email phoneNumber numAdults numChildren totalPrice bookingStatus paidAmount depositPaid createdAt note passengers")
       .sort({ createdAt: 1 })
       .lean();
 
     // Map isPresent từ TourDeparture vào Booking
     const checkinMap = new Map();
+    const attendedPassengerIdsMap = new Map();
     if (dep.passengerCheckins) {
       for (const ci of dep.passengerCheckins) {
         checkinMap.set(ci.bookingId.toString(), ci.isPresent);
+        attendedPassengerIdsMap.set(ci.bookingId.toString(), ci.attendedPassengerIds || []);
       }
     }
 
-    const data = bookings.map(b => ({
-      ...b,
-      isPresent: checkinMap.get(b._id.toString()) || false
-    }));
+    const data = bookings.map(b => {
+      const maskedPassengers = (b.passengers || []).map(p => ({
+        ...p,
+        idNumber: p.idNumber ? (() => {
+          const decrypted = decryptField(p.idNumber);
+          if (!decrypted) return '****';
+          return decrypted.length > 4 ? '*'.repeat(decrypted.length - 4) + decrypted.slice(-4) : '****';
+        })() : null,
+      }));
+
+      return {
+        ...b,
+        passengers: maskedPassengers,
+        isPresent: checkinMap.get(b._id.toString()) || false,
+        attendedPassengerIds: attendedPassengerIdsMap.get(b._id.toString()) || [],
+      };
+    });
 
     res.json({ total: data.length, data });
   } catch (err) {
@@ -138,7 +154,7 @@ export const leaderGetPassengers = async (req, res) => {
 export const leaderUpdateBookingCheckin = async (req, res) => {
   try {
     const { id, bookingId } = req.params;
-    const { isPresent } = req.body;
+    const { isPresent, attendedPassengerIds } = req.body;
 
     if (!mongoose.isValidObjectId(id) || !mongoose.isValidObjectId(bookingId)) {
       return res.status(400).json({ message: "Invalid IDs" });
@@ -164,12 +180,16 @@ export const leaderUpdateBookingCheckin = async (req, res) => {
 
     if (existingCheckinIndex > -1) {
       dep.passengerCheckins[existingCheckinIndex].isPresent = isPresent;
+      if (attendedPassengerIds !== undefined) {
+        dep.passengerCheckins[existingCheckinIndex].attendedPassengerIds = attendedPassengerIds;
+      }
       dep.passengerCheckins[existingCheckinIndex].checkedAt = new Date();
       dep.passengerCheckins[existingCheckinIndex].checkedBy = new mongoose.Types.ObjectId(req.user.id);
     } else {
       dep.passengerCheckins.push({
         bookingId: new mongoose.Types.ObjectId(bookingId),
         isPresent,
+        attendedPassengerIds: attendedPassengerIds || [],
         checkedAt: new Date(),
         checkedBy: new mongoose.Types.ObjectId(req.user.id),
       });

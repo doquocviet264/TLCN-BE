@@ -11,6 +11,7 @@ import {
   getPaymentReceiptTemplate,
 } from "../utils/emailTemplates.js";
 import { Notification } from "../models/Notification.js";
+import { encryptField, decryptField } from '../utils/crypto.js';
 
 // Helper: Trả lại slot và hoàn tác trạng thái nếu dưới min_guests
 const releaseDepartureSlots = async (departureId, guestsToRelease) => {
@@ -153,6 +154,17 @@ export const createBooking = async (req, res) => {
           paidAmount: 0,
           depositPaid: false,
           paymentRefs: [],
+          passengers: (() => {
+            const rawPassengers = req.body.passengers;
+            if (!Array.isArray(rawPassengers) || rawPassengers.length === 0) return [];
+            return rawPassengers.map((p) => ({
+              fullName: p.fullName || '',
+              dateOfBirth: p.dateOfBirth ? new Date(p.dateOfBirth) : undefined,
+              gender: p.gender || undefined,
+              idNumber: p.idNumber ? encryptField(p.idNumber) : undefined,
+              type: p.type || 'adult',
+            }));
+          })(),
         },
       ],
       { session }
@@ -404,9 +416,20 @@ export const getMyBookingDetail = async (req, res) => {
       booking.tourId = mappedTour;
     }
 
+    // Mask CCCD for user view
+    const maskedPassengers = (booking.passengers || []).map((p) => ({
+      ...p,
+      idNumber: p.idNumber ? (() => {
+        const decrypted = decryptField(p.idNumber);
+        if (!decrypted) return '****';
+        return decrypted.length > 4 ? '*'.repeat(decrypted.length - 4) + decrypted.slice(-4) : '****';
+      })() : null,
+    }));
+
     res.json({
       ...booking,
       tour: mappedTour,
+      passengers: maskedPassengers,
     });
   } catch (err) {
     res.status(500).json({ message: err.message });
@@ -528,6 +551,7 @@ export const getAdminBookings = async (req, res) => {
     let bookings = await Booking.find(filter)
       .populate({
         path: "tourDepartureId",
+        select: "tourId startDate endDate passengerCheckins",
         populate: {
           path: "tourId",
           select: "title destination",
@@ -542,6 +566,15 @@ export const getAdminBookings = async (req, res) => {
     // Mapping lại dữ liệu để tương thích với FE
     bookings = bookings.map((b) => {
       if (b.tourDepartureId) {
+        // Lấy danh sách điểm danh từ Departure
+        const checkinInfo = (b.tourDepartureId.passengerCheckins || []).find(
+          ci => ci.bookingId?.toString() === b._id.toString()
+        );
+        if (checkinInfo) {
+          b.isPresent = checkinInfo.isPresent;
+          b.attendedPassengerIds = checkinInfo.attendedPassengerIds || [];
+        }
+
         b.tourId = {
           _id: b.tourDepartureId.tourId?._id || b.tourDepartureId.tourId,
           title: b.tourDepartureId.tourId?.title,
@@ -710,6 +743,17 @@ export const adminCreateBooking = async (req, res) => {
           depositPaid,
           paymentRefs,
           isAdminCreated: true,
+          passengers: (() => {
+            const rawPassengers = req.body.passengers;
+            if (!Array.isArray(rawPassengers) || rawPassengers.length === 0) return [];
+            return rawPassengers.map((p) => ({
+              fullName: p.fullName || '',
+              dateOfBirth: p.dateOfBirth ? new Date(p.dateOfBirth) : undefined,
+              gender: p.gender || undefined,
+              idNumber: p.idNumber ? encryptField(p.idNumber) : undefined,
+              type: p.type || 'adult',
+            }));
+          })(),
         },
       ],
       { session }
@@ -1188,5 +1232,23 @@ export const checkOverlapBooking = async (req, res) => {
   } catch (err) {
     console.error("Check overlap error:", err);
     res.json({ hasOverlap: false });
+  }
+};
+
+// Admin: Lấy danh sách hành khách với CCCD đầy đủ (chỉ Admin)
+export const getBookingPassengers = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const booking = await Booking.findById(id).select('passengers code').lean();
+    if (!booking) return res.status(404).json({ message: 'Booking not found' });
+
+    const passengers = (booking.passengers || []).map((p) => ({
+      ...p,
+      idNumber: p.idNumber ? decryptField(p.idNumber) : null,
+    }));
+
+    res.json({ code: booking.code, passengers });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
   }
 };

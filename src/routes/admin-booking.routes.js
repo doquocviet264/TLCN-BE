@@ -14,6 +14,7 @@ import {
   getPaymentStats,
   getPaymentHistory,
   adminCreateBooking,
+  getBookingPassengers,
 } from "../controllers/booking.controller.js";
 
 const router = Router();
@@ -402,5 +403,8 @@ router.get("/:id/payment-history", auth, adminOnly, validateObjectId, getPayment
  *         description: OK
  */
 router.delete("/:id", auth, adminOnly, validateObjectId, deleteAdminBooking);
+
+// GET passengers with decrypted CCCD (admin only)
+router.get('/:id/passengers', auth, adminOnly, validateObjectId, getBookingPassengers);
 
 export default router;

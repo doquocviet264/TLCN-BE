@@ -13,6 +13,7 @@ const TimelineEventSchema = new mongoose.Schema({
 
 const PassengerCheckinSchema = new mongoose.Schema({
   bookingId: { type: mongoose.Schema.Types.ObjectId, ref: "Booking", required: true },
+  attendedPassengerIds: [{ type: String }],
   isPresent: { type: Boolean, default: false },
   checkedAt: { type: Date, default: Date.now },
   checkedBy: { type: mongoose.Schema.Types.ObjectId, ref: "Leader" }
